@@ -176,10 +176,32 @@ describe('intake publishability rules', () => {
         'Hosted class feedback: attendees said the studio was too far and several prospects requested drop-in pricing details.'
       )
     ).toMatchObject({
-      intakeRoute: 'Request',
+      intakeRoute: 'Feedback',
       category: 'Hosted Class & Partnerships',
       subCategory: 'Prospect Conversion Opportunity',
       priority: 'Medium',
     });
+  });
+
+  it('requires Momence class search for class-related feedback before drafting', () => {
+    const context = {
+      ...inferIntakeContextFromText('Member said Rohan class was too intense and the music was too loud.'),
+      description: 'Member said Rohan class was too intense and the music was too loud.',
+      reportedBy: 'ops@physique57india.com',
+    };
+
+    expect(getMissingIntakeFields(context)).toContain('classType');
+    expect(getMissingIntakeFields({ ...context, sessionId: 'session_123', classType: 'Studio Barre 57' })).not.toContain('classType');
+  });
+
+  it('requires Momence member search for singular member-related feedback before drafting', () => {
+    const context = {
+      ...inferIntakeContextFromText('Member Asha reported a refund issue and wants a follow-up.'),
+      description: 'Member Asha reported a refund issue and wants a follow-up.',
+      reportedBy: 'ops@physique57india.com',
+    };
+
+    expect(getMissingIntakeFields(context)).toContain('memberName');
+    expect(getMissingIntakeFields({ ...context, memberId: 'mom_123', memberName: 'Asha Mehta' })).not.toContain('memberName');
   });
 });

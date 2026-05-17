@@ -80,7 +80,7 @@ const CLASS_CONTEXT_CATEGORIES = new Set([
 ]);
 
 function isSpecificMemberRequired(context: IntakeContext, issueText: string, category: string): boolean {
-  if (!/select member|momence member|member profile|which member|member record|link member/.test(issueText)) return false;
+  if (/select member|momence member|member profile|which member|member record|link member/.test(issueText)) return true;
   if (/multiple|several|attendees|leads|prospects|team|staff|internal report|hosted class|post-class|regional operations|sales team/i.test(issueText)) {
     return false;
   }
@@ -135,7 +135,9 @@ export function inferIntakeContextFromText(text: string, context: IntakeContext 
   const inferred: Partial<IntakeContext> = {};
 
   if (isMissingIntakeValue(context.intakeRoute)) {
-    if (/refund|freeze|roll\s?over|extension|reschedule|request|asked|wants|would like|approval|waiver|upgrade|remove her name|share details/.test(lower)) {
+    if (/hosted class|host class|post-class feedback|attendees|lead tracking|lead feedback/.test(lower)) {
+      inferred.intakeRoute = 'Feedback';
+    } else if (/refund|freeze|roll\s?over|extension|reschedule|request|asked|wants|would like|approval|waiver|upgrade|remove her name|share details/.test(lower)) {
       inferred.intakeRoute = 'Request';
     } else if (/complain|angry|frustrated|unhappy|not resolved|delay|issue|problem|concern|denied|walked out|missing|stolen|harass|poach/.test(lower)) {
       inferred.intakeRoute = 'Complaint';
@@ -260,7 +262,7 @@ export function getMissingIntakeFields(context: IntakeContext): string[] {
     }
   }
 
-  if ((CLASS_CONTEXT_CATEGORIES.has(category) || hostedSpecific) && /specific session|which class|booking dispute|late cancellation|injury during class/.test(issueText)) {
+  if ((CLASS_CONTEXT_CATEGORIES.has(category) || hostedSpecific) && /class|session|hosted|barre|cycle|strength|trainer|instructor|late cancellation|injury during class/.test(issueText)) {
     add('classType', context.sessionId || context.classType);
   }
   if (category === 'Trainer Feedback' && /which trainer|specific trainer|trainer name/.test(issueText)) add('trainer', context.trainer);

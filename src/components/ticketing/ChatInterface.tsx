@@ -546,6 +546,23 @@ function mergeDraftWithContext(draft: DraftTicket, ctx: DetailContext): DraftTic
   };
 }
 
+function contextFromDraft(draft: DraftTicket, ctx: DetailContext): DetailContext {
+  return {
+    ...ctx,
+    category: draft.category || ctx.category,
+    subCategory: draft.subCategory || ctx.subCategory,
+    priority: draft.priority || ctx.priority,
+    studio: draft.studio || ctx.studio,
+    trainer: draft.trainer || ctx.trainer,
+    classType: draft.classType || ctx.classType,
+    classDateTime: draft.classDateTime || ctx.classDateTime,
+    memberName: draft.memberName || ctx.memberName,
+    memberContact: draft.memberContact || ctx.memberContact,
+    reportedBy: draft.reportedBy || ctx.reportedBy,
+    memberSentiment: draft.sentiment || ctx.memberSentiment,
+  };
+}
+
 function requiredFieldsForIssue(ctx: DetailContext, draft?: DraftTicket | null): string[] {
   const mergedContext: DetailContext = draft
     ? {
@@ -769,6 +786,11 @@ export const ChatInterface: React.FC = () => {
       const ticket = finalDetailForm || data?.needsMoreInfo || remainingMissingFields.length > 0
         ? null
         : data?.ticket || buildClientDraft(responseContext, text);
+      if (ticket) {
+        const syncedContext = contextFromDraft(ticket, responseContext);
+        activeContext = syncedContext;
+        setContext(syncedContext);
+      }
       const singleField = finalDetailForm?.fields.length === 1 ? finalDetailForm.fields[0] : null;
       const singleFieldNeedsPicker = singleField
         ? ['memberName', 'memberContact', 'classType', 'sessionId', 'membership'].includes(singleField.id)
@@ -897,15 +919,28 @@ export const ChatInterface: React.FC = () => {
     }
   };
 
-  const refineDraft = (draft: DraftTicket) => {
-    const prompt = [
-      'Please refine the current ticket draft before publishing.',
-      `Title: ${draft.title}`,
-      `Priority: ${draft.priority}`,
-      `Category: ${draft.category} / ${draft.subCategory}`,
-      `Description: ${draft.description}`,
-    ].join('\n');
-    sendMessage(prompt);
+  const refineDraft = () => {
+    // TicketPreviewCard owns the edit UI; this callback keeps the existing prop contract.
+  };
+
+  const saveEditedDraft = (messageId: string, draft: DraftTicket) => {
+    const syncedContext = contextFromDraft(draft, context);
+    setContext(syncedContext);
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              ticket: {
+                ...draft,
+                conversationSummary: draft.conversationSummary || draft.description,
+              },
+              published: false,
+              ticketId: undefined,
+            }
+          : message
+      )
+    );
   };
 
   return (
@@ -944,6 +979,7 @@ export const ChatInterface: React.FC = () => {
             onChipClick={handleChipClick}
             onConfirm={publishDraft}
             onEdit={refineDraft}
+            onSaveEdit={saveEditedDraft}
             onDetailFormSubmit={submitDetailForm}
             context={context}
           />
@@ -1003,9 +1039,10 @@ const MessageBubble: React.FC<{
   onChipClick: (chip: SuggestedChip) => void;
   onConfirm: (messageId: string, draft: DraftTicket) => void;
   onEdit: (draft: DraftTicket) => void;
+  onSaveEdit: (messageId: string, draft: DraftTicket) => void;
   onDetailFormSubmit: (values: Record<string, string>, form?: DetailForm) => void;
   context: DetailContext;
-}> = ({ message, onChipClick, onConfirm, onEdit, onDetailFormSubmit, context }) => {
+}> = ({ message, onChipClick, onConfirm, onEdit, onSaveEdit, onDetailFormSubmit, context }) => {
   const isUser = message.role === 'user';
   const visibleChips = (message.suggestedChips || []).filter((chip) => !context[chip.field]);
 
@@ -1068,9 +1105,10 @@ const MessageBubble: React.FC<{
         {message.ticket && (
           <div className="mt-2 w-full">
             <TicketPreviewCard
-              draft={message.ticket}
-              onConfirm={() => onConfirm(message.id, message.ticket as DraftTicket)}
-              onEdit={() => onEdit(message.ticket as DraftTicket)}
+              draft={mergeDraftWithContext(message.ticket, context)}
+              onConfirm={() => onConfirm(message.id, mergeDraftWithContext(message.ticket as DraftTicket, context))}
+              onEdit={() => onEdit(mergeDraftWithContext(message.ticket as DraftTicket, context))}
+              onSaveEdit={(draft) => onSaveEdit(message.id, draft)}
               confirmed={message.published}
               ticketId={message.ticketId}
             />

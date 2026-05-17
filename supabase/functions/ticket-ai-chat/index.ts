@@ -395,7 +395,8 @@ function inferContextFromText(text: string, context: Record<string, unknown> = {
   const inferred: Record<string, string> = {};
 
   if (!cleanString(context.intakeRoute)) {
-    if (/refund|freeze|roll\s?over|extension|reschedule|request|need|asked|wants|would like|approval|waiver|upgrade|remove her name|share details/.test(lower)) inferred.intakeRoute = 'Request';
+    if (/hosted class|host class|post-class feedback|attendees|lead tracking|lead feedback/.test(lower)) inferred.intakeRoute = 'Feedback';
+    else if (/refund|freeze|roll\s?over|extension|reschedule|request|need|asked|wants|would like|approval|waiver|upgrade|remove her name|share details/.test(lower)) inferred.intakeRoute = 'Request';
     else if (/complain|angry|frustrated|unhappy|not resolved|delay|issue|problem|concern|denied|walked out|missing|stolen|harass|poach/.test(lower)) inferred.intakeRoute = 'Complaint';
     else if (/reported|feedback|suggested|said|shared|mentioned|compliment|liked|loved|lead|hosted class|post-class/.test(lower)) inferred.intakeRoute = 'Feedback';
     else inferred.intakeRoute = 'Internal Reporting';
@@ -508,7 +509,8 @@ function requiredFieldsForIssue(text: string, context: Record<string, unknown>):
 
   if (physicalStudioCategories.has(category) && /select studio|which studio|studio record|exact studio/.test(lower)) add('studio', context.studio);
   const specificMemberRequired =
-    /select member|momence member|member profile|which member|member record|link member/.test(lower) &&
+    (/select member|momence member|member profile|which member|member record|link member/.test(lower) ||
+      /member|client|customer|guest|prospect|refund|freeze|roll|extension|membership|package|renewal|payment|billing|theft|stolen|injury|harassment|medical|missing cash/.test(lower)) &&
     !/multiple|several|attendees|leads|prospects|team|staff|internal report|hosted class|post-class|regional operations|sales team/.test(lower) &&
     category !== 'Hosted Class & Partnerships' &&
     category !== 'Sales & Consultation';
@@ -527,7 +529,7 @@ function requiredFieldsForIssue(text: string, context: Record<string, unknown>):
       add('rolloverReason', context.rolloverReason);
     }
   }
-  if ((classContextCategories.has(category) || hostedSpecific) && /specific session|which class|booking dispute|late cancellation|injury during class/.test(lower)) add('classType', context.sessionId || context.classType);
+  if ((classContextCategories.has(category) || hostedSpecific) && /class|session|hosted|barre|cycle|strength|trainer|instructor|late cancellation|injury during class/.test(lower)) add('classType', context.sessionId || context.classType);
   if (category === 'Trainer Feedback' && /which trainer|specific trainer|trainer name/.test(lower)) add('trainer', context.trainer);
   if (hostedSpecific) {
     if (/which partner|partner name|influencer name|host name/.test(lower)) add('partnerName', context.partnerName);
@@ -578,7 +580,6 @@ function toTicketRow(draft: DraftTicket, context: Record<string, unknown> = {}, 
   const assignment = ASSIGNMENT_RULES[draft.category] || ASSIGNMENT_RULES['General Feedback'];
 
   return {
-    source_ref: buildSourceRef(draft, context, conversationId),
     title: cleanString(draft.title, 'Member support ticket'),
     description: cleanString(draft.description, 'No description provided.'),
     category: cleanString(draft.category, 'General Feedback'),
@@ -597,7 +598,11 @@ function toTicketRow(draft: DraftTicket, context: Record<string, unknown> = {}, 
     tags: Array.from(new Set([...(draft.tags || []), 'ai-approved'])),
     sentiment: draft.sentiment || null,
     conversation_summary: draft.conversationSummary || draft.description,
-    metadata: draft.metadata || {},
+    metadata: {
+      ...(draft.metadata || {}),
+      source_ref: buildSourceRef(draft, context, conversationId),
+      intake_context: context,
+    },
     sla_due_at: computeSlaDueAt(priority),
   };
 }
@@ -621,11 +626,24 @@ Deno.serve(async (request) => {
 
       const supabase = createClient(supabaseUrl, serviceRoleKey);
       const sourceRef = buildSourceRef(draft, body.context || {}, body.conversationId);
-      const { data: existing } = await supabase
-        .from('tickets')
-        .select('*')
-        .eq('source_ref', sourceRef)
-        .maybeSingle();
+      const findExistingTicket = async () => {
+        const byMetadata = await supabase
+          .from('tickets')
+          .select('*')
+          .contains('metadata', { source_ref: sourceRef })
+          .maybeSingle();
+        if (!byMetadata.error || byMetadata.data) return byMetadata;
+
+        const bySourceRef = await supabase
+          .from('tickets')
+          .select('*')
+          .eq('source_ref', sourceRef)
+          .maybeSingle();
+        if (bySourceRef.error?.code === '42703') return byMetadata;
+        return bySourceRef;
+      };
+
+      const { data: existing } = await findExistingTicket();
 
       if (existing) {
         return json({
@@ -642,11 +660,7 @@ Deno.serve(async (request) => {
 
       if (error) {
         if (error.code === '23505') {
-          const { data: duplicated } = await supabase
-            .from('tickets')
-            .select('*')
-            .eq('source_ref', sourceRef)
-            .maybeSingle();
+          const { data: duplicated } = await findExistingTicket();
           if (duplicated) {
             return json({
               reply: `Ticket ${duplicated.id} was already created from this approved draft.`,
