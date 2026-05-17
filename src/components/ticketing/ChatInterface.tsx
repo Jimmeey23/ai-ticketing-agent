@@ -91,6 +91,19 @@ interface Message {
   detailForm?: DetailForm | null;
 }
 
+interface AiIntakeResponse {
+  conversationId?: string;
+  needsMoreInfo?: boolean;
+  reply?: string;
+  detailForm?: DetailForm | null;
+  ticket?: DraftTicket | null;
+  suggestedChips?: SuggestedChip[];
+  inferredContext?: Partial<DetailContext>;
+  missingFields?: string[];
+  publishable?: boolean;
+  urgencyReason?: string;
+}
+
 const GREETING: Message = {
   id: 'greet',
   role: 'assistant',
@@ -411,6 +424,42 @@ function applyDetailValue(ctx: DetailContext, field: string, value: string): Det
   return next;
 }
 
+function normalizeInferredContext(input: unknown): Partial<DetailContext> {
+  if (!input || typeof input !== 'object') return {};
+  const value = input as Record<string, unknown>;
+  const next: Partial<DetailContext> = {};
+  const assignString = (key: keyof DetailContext) => {
+    const candidate = value[key];
+    if (typeof candidate === 'string' && candidate.trim()) next[key] = candidate.trim();
+  };
+
+  assignString('intakeRoute');
+  assignString('requestType');
+  assignString('category');
+  assignString('subCategory');
+  assignString('priority');
+  assignString('memberSentiment');
+  assignString('desiredResolution');
+  assignString('urgencyReason');
+
+  return next;
+}
+
+function mergeInferredContext(ctx: DetailContext, inferred: Partial<DetailContext>, fallbackUrgency?: string): DetailContext {
+  const next: DetailContext = { ...ctx };
+  for (const [key, value] of Object.entries(inferred)) {
+    if (!value) continue;
+    if (key === 'category' && next.category !== value) {
+      next.category = value;
+      next.subCategory = undefined;
+      continue;
+    }
+    next[key] = value;
+  }
+  if (fallbackUrgency && !next.urgencyReason) next.urgencyReason = fallbackUrgency;
+  return next;
+}
+
 function fieldHasContextValue(field: DetailFormField, ctx: DetailContext): boolean {
   const value = ctx[field.id];
   const hasAnyIntakeValue = (...values: unknown[]) => values.some((candidate) => !isMissingIntakeValue(candidate));
@@ -426,28 +475,6 @@ function pruneDetailForm(form: DetailForm | null, ctx: DetailContext): DetailFor
   const fields = form.fields.filter((field) => !fieldHasContextValue(field, ctx));
   if (fields.length === 0) return null;
   return { ...form, fields };
-}
-
-function fastGateForm(ctx: DetailContext): DetailForm | null {
-  if (!ctx.intakeRoute) {
-    return normalizeDetailForm({
-      title: 'Select intake route',
-      description: 'Athena uses this first to route the workflow correctly.',
-      fields: ['intakeRoute'],
-      submitLabel: 'Continue',
-    });
-  }
-
-  if (!ctx.category || !ctx.subCategory) {
-    return normalizeDetailForm({
-      title: 'Select category and subcategory',
-      description: 'Once this path is set, Athena will decide the issue-specific fields.',
-      fields: ['category', 'subCategory'],
-      submitLabel: 'Continue',
-    });
-  }
-
-  return null;
 }
 
 function detailFormFromQuestionText(text: string, ctx: DetailContext): DetailForm | null {
@@ -711,24 +738,6 @@ export const ChatInterface: React.FC = () => {
     setInput('');
 
     try {
-      const localGateForm = pruneDetailForm(fastGateForm(activeContext), activeContext);
-      if (localGateForm) {
-        setPendingSingleField(null);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `a-${Date.now()}`,
-            role: 'assistant',
-            content: 'Please complete the required intake fields below before Athena drafts the ticket.',
-            suggestedChips: [],
-            detailForm: localGateForm,
-            published: false,
-            ticketId: undefined,
-          },
-        ]);
-        return;
-      }
-
       setLoading(true);
       const userMessages = newMessages.filter((m) => m.id !== 'greet').slice(-8);
       const firstUserIdx = userMessages.findIndex((m) => m.role === 'user');
@@ -743,7 +752,7 @@ export const ChatInterface: React.FC = () => {
         };
       }
 
-      const { data, error } = await supabase.functions.invoke('ticket-ai-chat', {
+      const { data, error } = await supabase.functions.invoke<AiIntakeResponse>('ticket-ai-chat', {
         body: {
           action: 'draftTicket',
           draftOnly: true,
@@ -771,15 +780,26 @@ export const ChatInterface: React.FC = () => {
         setConversationId(data.conversationId);
       }
 
-      const incompleteDraftForm = pruneDetailForm(detailFormForIncompleteDraft(data?.ticket, activeContext), activeContext);
-      const normalizedForm = pruneDetailForm(normalizeDetailForm(data?.detailForm), activeContext);
-      const localMissingForm = data?.needsMoreInfo ? pruneDetailForm(detailFormForContext(activeContext), activeContext) : null;
+      const inferredContext = normalizeInferredContext(data?.inferredContext);
+      let responseContext = mergeInferredContext(activeContext, inferredContext, data?.urgencyReason);
+      if (Object.keys(inferredContext).length > 0 || data?.urgencyReason) {
+        responseContext = { ...responseContext, reportedBy: reporterName };
+        activeContext = responseContext;
+        setContext(responseContext);
+      }
+
+      const incompleteDraftForm = pruneDetailForm(detailFormForIncompleteDraft(data?.ticket, responseContext), responseContext);
+      const normalizedForm = pruneDetailForm(normalizeDetailForm(data?.detailForm), responseContext);
+      const localMissingForm = pruneDetailForm(detailFormForContext(responseContext), responseContext);
       const detailForm = normalizedForm || incompleteDraftForm || localMissingForm;
-      const ticket = detailForm || data?.needsMoreInfo
-        ? null
-        : data?.ticket || buildClientDraft(activeContext, text);
-      const parsedQuestionForm = !ticket ? pruneDetailForm(detailFormFromQuestionText(data?.reply || '', activeContext), activeContext) : null;
+      const parsedQuestionForm = !detailForm && !data?.ticket
+        ? pruneDetailForm(detailFormFromQuestionText(data?.reply || '', responseContext), responseContext)
+        : null;
       const finalDetailForm = detailForm || parsedQuestionForm;
+      const remainingMissingFields = getMissingIntakeFields(responseContext);
+      const ticket = finalDetailForm || data?.needsMoreInfo || remainingMissingFields.length > 0
+        ? null
+        : data?.ticket || buildClientDraft(responseContext, text);
       const singleField = finalDetailForm?.fields.length === 1 ? finalDetailForm.fields[0] : null;
       const singleFieldNeedsPicker = singleField
         ? ['memberName', 'memberContact', 'classType', 'sessionId', 'membership'].includes(singleField.id)
