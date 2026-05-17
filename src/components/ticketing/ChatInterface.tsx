@@ -108,7 +108,7 @@ const GREETING: Message = {
   id: 'greet',
   role: 'assistant',
   content:
-    "I'm **Athena**, your Physique 57 India ticket intake assistant.\n\nStart by choosing the intake route below, or describe the member voice and I'll classify it before building the ticket draft for approval.",
+    "I'm **Athena**, your Physique 57 India ticket intake assistant.\n\nDocument what the member, client, guest, or team member reported. I'll classify the route, category, subcategory, and urgency before asking only for missing details.",
 };
 
 function getDisplayError(error: unknown, fallback = 'Unknown error'): string {
@@ -234,13 +234,6 @@ const DETAIL_FORM_FIELD_LIBRARY: Record<string, DetailFormField> = {
     type: 'text',
     required: true,
   },
-  reportedBy: {
-    id: 'reportedBy',
-    label: 'Documented By',
-    type: 'select',
-    required: true,
-    options: ASSOCIATES.map((associate) => associate.name),
-  },
   priority: {
     id: 'priority',
     label: 'Priority',
@@ -362,6 +355,7 @@ function normalizeDetailForm(input: unknown): DetailForm | null {
         return getDetailField(normalizedId);
       }
       const id = field.id ? (String(field.id) === 'requestType' ? 'intakeRoute' : String(field.id)) : '';
+      if (id === 'reportedBy') return null;
       const base = getDetailField(id);
       if (seen.has(id)) return null;
       seen.add(id);
@@ -843,6 +837,12 @@ export const ChatInterface: React.FC = () => {
   };
 
   const handleTemplate = (prompt: string, templateTitle?: string) => {
+    if (templateTitle && !INTAKE_ROUTES.includes(templateTitle)) {
+      setInput(prompt);
+      window.setTimeout(() => textareaRef.current?.focus(), 0);
+      return;
+    }
+
     const nextContext = templateTitle
       ? INTAKE_ROUTES.includes(templateTitle)
         ? { ...context, intakeRoute: templateTitle }

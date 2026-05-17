@@ -360,7 +360,8 @@ async function askAiForIntake(body: RequestBody, instructions: string): Promise<
             'Return JSON only using this schema:',
             '{"needsMoreInfo": boolean, "reply": string, "inferredContext": {"intakeRoute": string, "category": string, "subCategory": string, "priority": string, "memberSentiment": string, "desiredResolution": string}, "urgencyReason": string, "missingFields": string[], "publishable": boolean, "detailForm": {"title": string, "description": string, "fields": [{"id": string, "label": string, "type": "select|text|textarea|date|datetime-local|number", "required": boolean, "options": string[]}], "submitLabel": string}, "ticket": DraftTicket|null, "suggestedChips": []}',
             '',
-            'Master-data fields must use these exact IDs when needed: intakeRoute, category, subCategory, studio, trainer, classType, membership, memberName, memberContact, reportedBy, priority, description, desiredResolution, incidentDateTime, memberSentiment.',
+            'Master-data fields must use these exact IDs when needed: intakeRoute, category, subCategory, studio, trainer, classType, membership, memberName, memberContact, priority, description, desiredResolution, incidentDateTime, memberSentiment.',
+            'Do not ask for reportedBy; the frontend supplies it from the signed-in user.',
             'For issue-specific fields, create clear snake_case IDs prefixed by the category or subcategory, and include options for select fields.',
             'Infer category and subCategory from member voice whenever possible. Ask for category or subCategory only when the text is genuinely ambiguous after using the approved master data.',
             'If memberName/memberContact is needed, use memberName so the frontend renders Momence member search.',
@@ -644,18 +645,29 @@ Deno.serve(async (request) => {
 
     if (aiResponse) {
       const aiContext = { ...(body.context || {}), ...(aiResponse.inferredContext || {}) };
-      const aiTicket = aiResponse.needsMoreInfo ? null : aiResponse.ticket || fallbackDraft(messages, aiContext);
+      const guardedMissingFields = needsStructuredDetails(latestUserMessage, aiContext);
+      const needsMoreInfo = aiResponse.needsMoreInfo || guardedMissingFields.length > 0;
+      const aiTicket = needsMoreInfo ? null : aiResponse.ticket || fallbackDraft(messages, aiContext);
       return json({
         conversationId: body.conversationId || crypto.randomUUID(),
         promptProfile: instructions.includes('Athena') ? 'athena-ai-dynamic' : 'custom-ai-dynamic',
-        needsMoreInfo: aiResponse.needsMoreInfo,
-        reply: aiResponse.reply,
-        detailForm: aiResponse.detailForm,
+        needsMoreInfo,
+        reply: needsMoreInfo && !aiResponse.detailForm
+          ? 'I need a few details before drafting this ticket. Please complete the form below.'
+          : aiResponse.reply,
+        detailForm: aiResponse.detailForm || (guardedMissingFields.length > 0
+          ? {
+              title: 'Complete ticket intake details',
+              description: 'Athena inferred the classification and needs these details before drafting.',
+              fields: Array.from(new Set(guardedMissingFields)),
+              submitLabel: 'Continue drafting ticket',
+            }
+          : null),
         ticket: aiTicket,
         suggestedChips: aiResponse.suggestedChips || [],
         inferredContext: aiResponse.inferredContext || {},
-        missingFields: aiResponse.missingFields || [],
-        publishable: aiResponse.publishable === true,
+        missingFields: guardedMissingFields.length > 0 ? guardedMissingFields : aiResponse.missingFields || [],
+        publishable: !needsMoreInfo && aiResponse.publishable === true,
         urgencyReason: aiResponse.urgencyReason || '',
       });
     }

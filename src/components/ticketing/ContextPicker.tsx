@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { STUDIOS, TRAINERS, CLASS_TYPES, CATEGORIES, MEMBERSHIPS } from '@/lib/ticketing-data';
-import { MapPin, User, Calendar, Tag, ChevronDown, X, BadgeCheck, Search } from 'lucide-react';
+import { STUDIOS, TRAINERS, CLASS_TYPES, CATEGORIES, MEMBERSHIPS, INTAKE_ROUTES, PRIORITY_SLA } from '@/lib/ticketing-data';
+import { MapPin, User, Calendar, Tag, ChevronDown, X, BadgeCheck, Search, Route, Siren } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import {
@@ -11,6 +11,7 @@ import {
 } from '@/lib/momence-api';
 
 export interface Context {
+  intakeRoute?: string;
   memberId?: string;
   memberName?: string;
   memberContact?: string;
@@ -22,6 +23,8 @@ export interface Context {
   membership?: string;
   category?: string;
   subCategory?: string;
+  priority?: string;
+  urgencyReason?: string;
   reportedBy?: string;
 }
 
@@ -118,6 +121,14 @@ export const ContextPicker: React.FC<Props> = ({ context, onChange }) => {
         onClear={() => onChange({ ...context, membership: undefined })}
       />
       <Picker
+        icon={<Route className="w-3 h-3" />}
+        label="Route"
+        value={context.intakeRoute}
+        options={INTAKE_ROUTES}
+        onSelect={(v) => onChange({ ...context, intakeRoute: v })}
+        onClear={() => onChange({ ...context, intakeRoute: undefined })}
+      />
+      <Picker
         icon={<Tag className="w-3 h-3" />}
         label="Category"
         value={context.category}
@@ -135,6 +146,20 @@ export const ContextPicker: React.FC<Props> = ({ context, onChange }) => {
           onClear={() => onChange({ ...context, subCategory: undefined })}
         />
       )}
+      <Picker
+        icon={<Siren className="w-3 h-3" />}
+        label="Priority"
+        value={context.priority}
+        options={Object.keys(PRIORITY_SLA)}
+        onSelect={(v) => onChange({ ...context, priority: v })}
+        onClear={() => onChange({ ...context, priority: undefined })}
+      />
+      <input
+        value={context.urgencyReason || ''}
+        onChange={(event) => onChange({ ...context, urgencyReason: event.target.value })}
+        placeholder="Urgency reason"
+        className="h-[26px] min-w-[190px] rounded-md border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600 outline-none transition placeholder:text-slate-400 focus:border-blue-300 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
+      />
     </div>
   );
 };
