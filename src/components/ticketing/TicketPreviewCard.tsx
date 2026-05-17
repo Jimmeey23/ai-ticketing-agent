@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { PRIORITY_SLA } from '@/lib/ticketing-data';
+import { CATEGORIES, PRIORITY_SLA, STUDIOS } from '@/lib/ticketing-data';
 import { Sparkles, Check, Pencil, MapPin, User, Calendar, Tag, Clock, ShieldCheck } from 'lucide-react';
 
 interface DraftTicket {
@@ -79,12 +79,50 @@ export const TicketPreviewCard: React.FC<Props> = ({ draft, onConfirm, onEdit, o
       </div>
 
       {editing ? (
-        <textarea
-          value={editedDraft.description}
-          onChange={(event) => updateEditedDraft('description', event.target.value)}
-          rows={8}
-          className="mb-4 w-full resize-y rounded-xl border border-blue-100 bg-white p-3 text-xs leading-relaxed text-stone-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-300"
-        />
+        <div className="mb-4 space-y-3">
+          <textarea
+            value={editedDraft.description}
+            onChange={(event) => updateEditedDraft('description', event.target.value)}
+            rows={8}
+            className="w-full resize-y rounded-xl border border-blue-100 bg-white p-3 text-xs leading-relaxed text-stone-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-300"
+          />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <EditSelect
+              label="Priority"
+              value={editedDraft.priority}
+              options={Object.keys(PRIORITY_SLA)}
+              onChange={(value) => updateEditedDraft('priority', value as DraftTicket['priority'])}
+            />
+            <EditSelect
+              label="Category"
+              value={editedDraft.category}
+              options={Object.keys(CATEGORIES)}
+              onChange={(value) => {
+                setEditedDraft((current) => ({
+                  ...current,
+                  category: value,
+                  subCategory: CATEGORIES[value]?.includes(current.subCategory) ? current.subCategory : CATEGORIES[value]?.[0] || 'Other',
+                }));
+              }}
+            />
+            <EditSelect
+              label="Subcategory"
+              value={editedDraft.subCategory}
+              options={CATEGORIES[editedDraft.category] || []}
+              onChange={(value) => updateEditedDraft('subCategory', value)}
+            />
+            <EditSelect
+              label="Studio"
+              value={editedDraft.studio}
+              options={STUDIOS}
+              onChange={(value) => updateEditedDraft('studio', value)}
+            />
+            <EditInput label="Instructor" value={editedDraft.trainer || ''} onChange={(value) => updateEditedDraft('trainer', value)} />
+            <EditInput label="Signature experience" value={editedDraft.classType || ''} onChange={(value) => updateEditedDraft('classType', value)} />
+            <EditInput label="Community member" value={editedDraft.memberName || ''} onChange={(value) => updateEditedDraft('memberName', value)} />
+            <EditInput label="Member contact" value={editedDraft.memberContact || ''} onChange={(value) => updateEditedDraft('memberContact', value)} />
+          </div>
+        </div>
       ) : (
         <FormattedDescription text={draft.description} />
       )}
@@ -215,4 +253,28 @@ const Row: React.FC<{ icon: React.ReactNode; label: string; value: string }> = (
       <div className="truncate text-stone-700 dark:text-stone-200">{value}</div>
     </div>
   </div>
+);
+
+const EditInput: React.FC<{ label: string; value: string; onChange: (value: string) => void }> = ({ label, value, onChange }) => (
+  <label className="block rounded-lg border border-blue-100 bg-white p-2 dark:border-stone-800 dark:bg-stone-950">
+    <span className="mb-1 block text-[9px] font-semibold uppercase tracking-[0.14em] text-stone-400">{label}</span>
+    <input
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="h-8 w-full rounded-md border border-stone-200 bg-white px-2 text-xs text-stone-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-100"
+    />
+  </label>
+);
+
+const EditSelect: React.FC<{ label: string; value: string; options: string[]; onChange: (value: string) => void }> = ({ label, value, options, onChange }) => (
+  <label className="block rounded-lg border border-blue-100 bg-white p-2 dark:border-stone-800 dark:bg-stone-950">
+    <span className="mb-1 block text-[9px] font-semibold uppercase tracking-[0.14em] text-stone-400">{label}</span>
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="h-8 w-full rounded-md border border-stone-200 bg-white px-2 text-xs text-stone-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-100"
+    >
+      {options.map((option) => <option key={option} value={option}>{option}</option>)}
+    </select>
+  </label>
 );
