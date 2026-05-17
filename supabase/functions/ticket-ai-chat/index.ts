@@ -395,31 +395,40 @@ function inferContextFromText(text: string, context: Record<string, unknown> = {
   const inferred: Record<string, string> = {};
 
   if (!cleanString(context.intakeRoute)) {
-    if (/refund|freeze|roll|extension|reschedule|request|need|asked|wants|would like/.test(lower)) inferred.intakeRoute = 'Request';
-    else if (/complain|angry|frustrated|unhappy|not resolved|delay|issue|problem|concern/.test(lower)) inferred.intakeRoute = 'Complaint';
-    else if (/reported|feedback|suggested|said|shared|mentioned|compliment|liked|loved/.test(lower)) inferred.intakeRoute = 'Feedback';
+    if (/refund|freeze|roll\s?over|extension|reschedule|request|need|asked|wants|would like|approval|waiver|upgrade|remove her name|share details/.test(lower)) inferred.intakeRoute = 'Request';
+    else if (/complain|angry|frustrated|unhappy|not resolved|delay|issue|problem|concern|denied|walked out|missing|stolen|harass|poach/.test(lower)) inferred.intakeRoute = 'Complaint';
+    else if (/reported|feedback|suggested|said|shared|mentioned|compliment|liked|loved|lead|hosted class|post-class/.test(lower)) inferred.intakeRoute = 'Feedback';
     else inferred.intakeRoute = 'Internal Reporting';
   }
 
   if (!cleanString(context.category)) {
-    if (/billing|refund|payment|freeze|roll over|rollover|extension|membership|package|renewal|expiry|credit/.test(lower)) {
-      inferred.category = 'Pricing and Memberships';
-      inferred.subCategory = /freeze|pause/.test(lower) ? 'Membership Pause and Freeze Policy' : /refund/.test(lower) ? 'Refund and Cancellation Policy Issue' : 'Class Pack Expiry Confusion';
-    } else if (/hosted|partner|influencer|partnership/.test(lower)) {
+    if (/momence|crm|zoho|data accuracy|handover|sop|standard operating|process|workflow|payroll|performance review|finance|reconciliation|upi|marketing|campaign|collateral|partnership approval|internal operations|internal memo/.test(lower)) {
+      inferred.category = 'Operating Systems';
+      inferred.subCategory = /momence|crm|data/.test(lower) ? 'Momence Issues' : /payment|upi|reconciliation|finance/.test(lower) ? 'Payment Gateway Issue' : 'Technical Assistance';
+    } else if (/hosted|host class|influencer|partner|lead tracking|lead feedback|guestlist|collaboration/.test(lower)) {
       inferred.category = 'Hosted Class & Partnerships';
-      inferred.subCategory = 'Hosted Class Feedback';
+      inferred.subCategory = /lead|sales|conversion|prospect|drop-in|share details|requested/.test(lower) ? 'Prospect Conversion Opportunity' : /swap|instructor/.test(lower) ? 'Partner Instructor Feedback' : 'Hosted Class Feedback';
+    } else if (/billing|refund|payment|freeze|roll over|rollover|extension|membership|package|renewal|expiry|credit|late cancellation|waiver|upgrade/.test(lower)) {
+      inferred.category = 'Pricing and Memberships';
+      inferred.subCategory = /freeze|pause/.test(lower) ? 'Membership Pause and Freeze Policy' : /refund|waiver/.test(lower) ? 'Refund and Cancellation Policy Issue' : /upgrade|downgrade/.test(lower) ? 'Membership Upgrade/Downgrade' : 'Class Pack Expiry Confusion';
+    } else if (/injury|safety|medical|harassment|security|theft|stolen|missing cash|cash envelope|unsafe|faint|cramp|conflict/.test(lower)) {
+      inferred.category = 'Safety and Security';
+      inferred.subCategory = /theft|stolen|missing cash|cash envelope/.test(lower) ? 'Theft Prevention Measures' : /harass|conflict/.test(lower) ? 'Harassment Reports' : 'Personal Safety Concerns';
     } else if (/equipment|ac|temperature|locker|clean|odour|audio|lighting|washroom|shower/.test(lower)) {
       inferred.category = 'Studio Amenities and Facilities';
-      inferred.subCategory = /temperature|ac/.test(lower) ? 'Air Quality Poor' : /clean|hygiene/.test(lower) ? 'Cleanliness and Hygiene' : 'Studio Odour and Aroma';
-    } else if (/injury|safety|medical|harassment|security|theft|stolen/.test(lower)) {
-      inferred.category = 'Safety and Security';
-      inferred.subCategory = /theft|stolen/.test(lower) ? 'Theft Prevention Measures' : 'Personal Safety Concerns';
+      inferred.subCategory = /temperature|ac|cold|hot|ventilation|air quality/.test(lower) ? 'Air Quality Poor' : /clean|hygiene/.test(lower) ? 'Cleanliness and Hygiene' : /locker/.test(lower) ? 'Locker Availability' : /boutique|retail/.test(lower) ? 'Boutique Availability Issues' : 'Studio Odour and Aroma';
     } else if (/trainer|instructor|class|music|cue|correction|adjustment|overcrowded/.test(lower)) {
-      inferred.category = 'Class Experience';
-      inferred.subCategory = /overcrowd|capacity/.test(lower) ? 'Overcrowding in Class' : /audio|music/.test(lower) ? 'Audio Issues' : 'Class Flow and Pacing';
+      inferred.category = /trainer|instructor|correction|adjustment|punctual|engagement|no-show/.test(lower) ? 'Trainer Feedback' : 'Class Experience';
+      inferred.subCategory = /overcrowd|capacity/.test(lower) ? 'Overcrowding in Class' : /audio|music|loud/.test(lower) ? 'Audio Issues' : /punctual|late|no-show/.test(lower) ? 'Trainer Punctuality Issues' : /intensity/.test(lower) ? 'Class Intensity Too High/Low' : 'Class Flow and Pacing';
+    } else if (/booking|schedule|class availability|late entry|waitlist|cancelled|reschedule|timing|variety/.test(lower)) {
+      inferred.category = 'Scheduling';
+      inferred.subCategory = /late entry/.test(lower) ? 'Late Arrival Policy' : /availability|variety/.test(lower) ? 'Additional Classes' : /cancel/.test(lower) ? 'Last-minute Cancellations' : 'Class Capacity Issues';
     } else if (/whatsapp|call|email|response|follow-up|front desk|communication/.test(lower)) {
       inferred.category = 'Customer Service and Communication';
       inferred.subCategory = 'Delay in Response';
+    } else if (/sales|lead|trial|conversion|competitor|price|drop-in|location too far|prospect/.test(lower)) {
+      inferred.category = 'Sales & Consultation';
+      inferred.subCategory = /competitor/.test(lower) ? 'Competitor Mentioned' : /price|drop-in/.test(lower) ? 'Prospect Price Concern' : 'Lead Quality Note';
     } else {
       inferred.category = 'General Feedback';
       inferred.subCategory = 'Other';
@@ -427,10 +436,18 @@ function inferContextFromText(text: string, context: Record<string, unknown> = {
   }
 
   if (!cleanString(context.priority)) {
-    if (/injury|medical|harassment|security|theft|stolen|unsafe|emergency/.test(lower)) inferred.priority = 'Critical';
-    else if (/angry|frustrated|urgent|refund|not resolved|escalat|renewal|cancel/.test(lower)) inferred.priority = 'High';
-    else if (/complain|issue|concern|delay|request/.test(lower)) inferred.priority = 'Medium';
+    if (/injury|medical|harassment|security|theft|stolen|unsafe|emergency|missing cash|40,000/.test(lower)) inferred.priority = 'Critical';
+    else if (/angry|frustrated|urgent|refund|not resolved|escalat|renewal|cancel|walked out|denied|poach|high-value/.test(lower)) inferred.priority = 'High';
+    else if (/complain|issue|concern|delay|request|follow-up|hosted|lead/.test(lower)) inferred.priority = 'Medium';
     else inferred.priority = 'Low';
+  }
+
+  if (!cleanString(context.studio)) {
+    if (/bandra|supreme hq/.test(lower)) inferred.studio = 'Supreme HQ, Bandra';
+    else if (/kemps|kwality/.test(lower)) inferred.studio = 'Kwality House, Kemps Corner';
+    else if (/kenkere/.test(lower)) inferred.studio = 'Kenkere House, Bengaluru';
+    else if (/copper|cloves/.test(lower)) inferred.studio = 'the Studio by Copper & Cloves, Bengaluru';
+    else if (/courtside/.test(lower)) inferred.studio = 'Courtside, Mumbai';
   }
 
   return inferred;
@@ -489,32 +506,39 @@ function requiredFieldsForIssue(text: string, context: Record<string, unknown>):
   const hostedSpecific = /hosted|partner|influencer|partnership/.test(lower) || category === 'Hosted Class & Partnerships';
   const prioritySpecific = route !== 'feedback' || /safety|security|theft|repair|maintenance|tech|operating|pricing|membership|customer service|complaint|urgent|injury|hazard/.test(`${category} ${subCategory} ${lower}`.toLowerCase());
 
-  if (physicalStudioCategories.has(category)) add('studio', context.studio);
-  if (route !== 'internal reporting' && (memberFacingCategories.has(category) || membershipSpecific)) add('memberName', context.memberId || context.memberName);
-  if (membershipSpecific) {
+  if (physicalStudioCategories.has(category) && /select studio|which studio|studio record|exact studio/.test(lower)) add('studio', context.studio);
+  const specificMemberRequired =
+    /select member|momence member|member profile|which member|member record|link member/.test(lower) &&
+    !/multiple|several|attendees|leads|prospects|team|staff|internal report|hosted class|post-class|regional operations|sales team/.test(lower) &&
+    category !== 'Hosted Class & Partnerships' &&
+    category !== 'Sales & Consultation';
+  if (route !== 'internal reporting' && specificMemberRequired && (memberFacingCategories.has(category) || membershipSpecific)) add('memberName', context.memberId || context.memberName);
+  if (membershipSpecific && /select active membership|which membership|membership record|package record/.test(lower)) {
     add('membership', context.membership);
-    if (/freeze|pause/.test(lower)) {
+    if (/freeze start date|freeze end date|exact freeze dates/.test(lower)) {
       add('freezeStartDate', context.freezeStartDate);
       add('freezeEndDate', context.freezeEndDate);
       add('freezeReason', context.freezeReason);
     }
-    if (/roll|extension|expiry|credit/.test(lower)) {
+    if (/classes remaining|package expiry date|requested rollover date|exact extension date/.test(lower)) {
       add('classesRemaining', context.classesRemaining);
       add('packageExpiryDate', context.packageExpiryDate);
       add('requestedRolloverDate', context.requestedRolloverDate);
       add('rolloverReason', context.rolloverReason);
     }
   }
-  if (classContextCategories.has(category) || hostedSpecific) add('classType', context.sessionId || context.classType);
-  if (category === 'Trainer Feedback') add('trainer', context.trainer);
+  if ((classContextCategories.has(category) || hostedSpecific) && /specific session|which class|booking dispute|late cancellation|injury during class/.test(lower)) add('classType', context.sessionId || context.classType);
+  if (category === 'Trainer Feedback' && /which trainer|specific trainer|trainer name/.test(lower)) add('trainer', context.trainer);
   if (hostedSpecific) {
-    add('partnerName', context.partnerName);
-    add('hostedFeedbackArea', context.hostedFeedbackArea);
-    add('prospectQuality', context.prospectQuality);
-    add('followUpPreference', context.followUpPreference);
+    if (/which partner|partner name|influencer name|host name/.test(lower)) add('partnerName', context.partnerName);
+    if (/feedback area|prospect quality|follow-up preference/.test(lower)) {
+      add('hostedFeedbackArea', context.hostedFeedbackArea);
+      add('prospectQuality', context.prospectQuality);
+      add('followUpPreference', context.followUpPreference);
+    }
   }
-  if (route === 'request' || route === 'complaint') add('desiredResolution', context.desiredResolution);
-  if (route === 'feedback' || route === 'complaint') add('memberSentiment', context.memberSentiment);
+  if ((route === 'request' || route === 'complaint') && /desired resolution|requested resolution|what resolution|what does the member want/.test(lower)) add('desiredResolution', context.desiredResolution);
+  if ((route === 'feedback' || route === 'complaint') && /sentiment unclear|member sentiment|how upset|frustration level/.test(lower)) add('memberSentiment', context.memberSentiment);
 
   add('reportedBy', context.reportedBy);
   if (prioritySpecific) add('priority', context.priority);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   captureMemberVoiceFromText,
   getMissingIntakeFields,
+  inferIntakeContextFromText,
   isIntakePublishable,
   isMissingIntakeValue,
   type IntakeContext,
@@ -21,9 +22,6 @@ describe('intake publishability rules', () => {
     };
 
     expect(getMissingIntakeFields(context)).toEqual([
-      'memberName',
-      'desiredResolution',
-      'memberSentiment',
       'reportedBy',
       'priority',
       'description',
@@ -49,7 +47,7 @@ describe('intake publishability rules', () => {
     expect(isMissingIntakeValue('Member-reported issue')).toBe(true);
     expect(isMissingIntakeValue('AI Intake')).toBe(true);
     expect(isMissingIntakeValue('Bandra')).toBe(false);
-    expect(getMissingIntakeFields(context)).toEqual(['studio', 'reportedBy', 'description']);
+    expect(getMissingIntakeFields(context)).toEqual(['reportedBy', 'description']);
 
     expect(getMissingIntakeFields({ ...context, studio: 'Bandra' })).toEqual(['reportedBy', 'description']);
   });
@@ -137,5 +135,51 @@ describe('intake publishability rules', () => {
         {}
       )
     ).toBe('Client stated: the studio space felt too warm during the full session.');
+  });
+
+  it('infers real historical ticket patterns without manual route selection', () => {
+    expect(
+      inferIntakeContextFromText(
+        'Trial client walked out mid-class because the music was too loud and the session felt more intense than expected.'
+      )
+    ).toMatchObject({
+      intakeRoute: 'Complaint',
+      category: 'Class Experience',
+      subCategory: 'Audio Issues',
+      priority: 'High',
+    });
+
+    expect(
+      inferIntakeContextFromText(
+        'Regional operations reported Momence CRM data is inaccurate for lapsed clients and follow-ups are falling through.'
+      )
+    ).toMatchObject({
+      intakeRoute: 'Feedback',
+      category: 'Operating Systems',
+      subCategory: 'Momence Issues',
+      priority: 'Medium',
+    });
+
+    expect(
+      inferIntakeContextFromText(
+        'Client reported a missing cash envelope from the locker after a cycle trial class.'
+      )
+    ).toMatchObject({
+      intakeRoute: 'Complaint',
+      category: 'Safety and Security',
+      subCategory: 'Theft Prevention Measures',
+      priority: 'Critical',
+    });
+
+    expect(
+      inferIntakeContextFromText(
+        'Hosted class feedback: attendees said the studio was too far and several prospects requested drop-in pricing details.'
+      )
+    ).toMatchObject({
+      intakeRoute: 'Request',
+      category: 'Hosted Class & Partnerships',
+      subCategory: 'Prospect Conversion Opportunity',
+      priority: 'Medium',
+    });
   });
 });

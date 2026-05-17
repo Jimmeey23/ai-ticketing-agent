@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Send, Sparkles, Bot, User as UserIcon, RotateCcw, CheckCircle2 } from 'lucide-react';
 import { TicketPreviewCard } from './TicketPreviewCard';
-import { QuickTemplates } from './QuickTemplates';
 import { ContextPicker, Context } from './ContextPicker';
 import { useTickets } from './TicketContext';
 import { useBackendAuth } from '@/contexts/BackendAuthContext';
@@ -17,6 +16,7 @@ import {
 import {
   captureMemberVoiceFromText,
   getMissingIntakeFields,
+  inferIntakeContextFromText,
   isMissingIntakeValue,
   IntakeContext,
 } from '@/lib/intake-rules';
@@ -480,24 +480,6 @@ function detailFormFromQuestionText(text: string, ctx: DetailContext): DetailFor
     .filter((line) => line.endsWith('?') || /which|what|when|where|issue|experience|report|happen|date|time|resolution|refund|apology|investigation|member|contact|studio|request|category|reported|priority|freeze|roll|hosted|partner/i.test(line));
 
   if (questionLines.length < 2) {
-    if (!ctx.intakeRoute) {
-      return normalizeDetailForm({
-        title: 'Choose the intake route',
-        description: 'Athena will select the right category flow after this route is set.',
-        fields: ['intakeRoute'],
-        submitLabel: 'Continue',
-      });
-    }
-
-    if (!ctx.category || !ctx.subCategory) {
-      return normalizeDetailForm({
-        title: 'Choose category and subcategory',
-        description: 'Athena needs the category path first so only relevant fields are shown next.',
-        fields: ['category', 'subCategory'],
-        submitLabel: 'Continue',
-      });
-    }
-
     return null;
   }
 
@@ -505,13 +487,6 @@ function detailFormFromQuestionText(text: string, ctx: DetailContext): DetailFor
   const add = (id: string, present?: string) => {
     if (!present) fieldIds.add(id);
   };
-
-  if (!ctx.intakeRoute) {
-    add('intakeRoute', ctx.intakeRoute);
-  } else if (!ctx.category || !ctx.subCategory) {
-    add('category', ctx.category);
-    add('subCategory', ctx.subCategory);
-  }
 
   for (const line of questionLines) {
     const lower = line.toLowerCase();
@@ -521,12 +496,7 @@ function detailFormFromQuestionText(text: string, ctx: DetailContext): DetailFor
     if (lower.includes('issue') || lower.includes('experience') || lower.includes('report') || lower.includes('what happened') || lower.includes('what did')) add('description', ctx.description);
     if (lower.includes('when') || lower.includes('date') || lower.includes('time') || lower.includes('happen') || lower.includes('incident')) add('incidentDateTime', ctx.incidentDateTime);
     if (lower.includes('resolution') || lower.includes('looking for') || lower.includes('refund') || lower.includes('apology') || lower.includes('investigation') || lower.includes('something else')) add('desiredResolution', ctx.desiredResolution);
-    if (lower.includes('request') || lower.includes('complaint') || lower.includes('feedback') || lower.includes('internal reporting') || lower.includes('route')) add('intakeRoute', ctx.intakeRoute);
     if (lower.includes('specific') || lower.includes('type')) add('requestType', ctx.requestType);
-    if (lower.includes('category') || lower.includes('touchpoint')) {
-      add('category', ctx.category);
-      add('subCategory', ctx.subCategory);
-    }
     if (lower.includes('reported') || lower.includes('documented')) add('reportedBy', ctx.reportedBy);
     if (lower.includes('priority') || lower.includes('urgent')) add('priority', ctx.priority);
     if (lower.includes('freeze')) {
@@ -551,10 +521,8 @@ function detailFormFromQuestionText(text: string, ctx: DetailContext): DetailFor
   }
 
   return normalizeDetailForm({
-    title: !ctx.category || !ctx.subCategory ? 'Choose category and capture details' : 'Complete the ticket details',
-    description: !ctx.category || !ctx.subCategory
-      ? 'Select the category path first, then complete the relevant details in this same form.'
-      : 'Athena grouped the questions into a structured intake form using the Physique 57 master data lists.',
+    title: 'Complete the ticket details',
+    description: 'Athena grouped the missing operational details into a structured intake form using the Physique 57 master data lists.',
     fields: Array.from(fieldIds),
     submitLabel: 'Continue drafting ticket',
   });
@@ -723,6 +691,11 @@ export const ChatInterface: React.FC = () => {
       activeContext = applyDetailValue(activeContext, 'description', capturedVoice);
       setContext(activeContext);
     }
+    const localInference = inferIntakeContextFromText(capturedVoice || text, activeContext);
+    if (Object.keys(localInference).length > 0) {
+      activeContext = { ...activeContext, ...localInference, reportedBy: reporterName };
+      setContext(activeContext);
+    }
     const preamble = buildContextPreamble(activeContext);
     const userMsg: Message = {
       id: `u-${Date.now()}`,
@@ -834,22 +807,6 @@ export const ChatInterface: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleTemplate = (prompt: string, templateTitle?: string) => {
-    if (templateTitle && !INTAKE_ROUTES.includes(templateTitle)) {
-      setInput(prompt);
-      window.setTimeout(() => textareaRef.current?.focus(), 0);
-      return;
-    }
-
-    const nextContext = templateTitle
-      ? INTAKE_ROUTES.includes(templateTitle)
-        ? { ...context, intakeRoute: templateTitle }
-        : { ...context, requestType: templateTitle }
-      : context;
-    if (templateTitle) setContext(nextContext);
-    sendMessage(prompt, nextContext);
   };
 
   const handleChipClick = (chip: SuggestedChip) => {
@@ -991,11 +948,6 @@ export const ChatInterface: React.FC = () => {
             context={context}
           />
         ))}
-        {messages.length === 1 && (
-          <div className="pt-2">
-            <QuickTemplates onSelect={handleTemplate} />
-          </div>
-        )}
         {loading && <TypingIndicator />}
       </div>
 

@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/components/ticketing/ChatInterface.tsx', import.meta.url), 'utf8');
 const contextPickerSource = readFileSync(new URL('../src/components/ticketing/ContextPicker.tsx', import.meta.url), 'utf8');
+const quickTemplatesSource = readFileSync(new URL('../src/components/ticketing/QuickTemplates.tsx', import.meta.url), 'utf8');
 const intakeRulesSource = readFileSync(new URL('../src/lib/intake-rules.ts', import.meta.url), 'utf8');
-const sourceWithoutComments = `${source}\n${contextPickerSource}`
+const sourceWithoutComments = `${source}\n${contextPickerSource}\n${quickTemplatesSource}`
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/\/\/.*$/gm, '');
 const intakeRulesWithoutComments = intakeRulesSource
@@ -49,6 +50,16 @@ rejectPattern(
 rejectPattern(
   /fastGateForm\(activeContext\)/,
   'Intake regression: ChatInterface must not require route/category selection before Athena inference.'
+);
+
+rejectPattern(
+  /Start with|Choose the intake route|Select intake route|Start by choosing the intake route/,
+  'Intake regression: the intake UI must not present a route-first starting flow.'
+);
+
+rejectPattern(
+  /<QuickTemplates|QuickTemplates\s+onSelect/,
+  'Intake regression: route/template starter cards must not be shown on first load.'
 );
 
 rejectPattern(
