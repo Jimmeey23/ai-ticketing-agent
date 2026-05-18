@@ -5,7 +5,7 @@ import { ChatInterface } from './ticketing/ChatInterface';
 import { TicketDetailDrawer } from './ticketing/TicketDetailDrawer';
 import { AuthGate } from './AuthGate';
 import { BackendAuthProvider, useBackendAuth } from '@/contexts/BackendAuthContext';
-import { AlertTriangle, BarChart3, CheckCircle2, Clock, Flame, Gauge, MessageSquareText, RotateCcw, Settings, ShieldAlert, Tickets, Users, Workflow } from 'lucide-react';
+import { AlertTriangle, BarChart3, Bell, CheckCircle2, Clock, Flame, Gauge, MessageSquareText, RotateCcw, Settings, ShieldAlert, Tickets, Users, Workflow } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useNavigate } from 'react-router-dom';
 import { ASSOCIATES, CATEGORIES, PRIORITY_SLA, STUDIOS, getEscalationTarget, getSlaState, isClosedTicket, isTicketBreached, Ticket } from '@/lib/ticketing-data';
@@ -28,6 +28,7 @@ const TicketDashboard = lazy(() =>
 const sideTabs = [
   { value: 'chat', label: 'Chat Intake', icon: MessageSquareText },
   { value: 'queue', label: 'Triage Queue', icon: Gauge },
+  { value: 'notifications', label: 'Notifications', icon: Bell },
   { value: 'tickets', label: 'Submitted Tickets', icon: Tickets },
   { value: 'insights', label: 'Insights', icon: BarChart3 },
   { value: 'momence', label: 'Momence Ops', icon: Workflow },
@@ -48,7 +49,7 @@ const AppLayout: React.FC = () => {
 
 const SupportShell: React.FC = () => {
   const { user, signOut, accessRole } = useBackendAuth();
-  const { selectedTicket, setSelectedTicket } = useTickets();
+  const { notifications, selectedTicket, setSelectedTicket } = useTickets();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('chat');
   const [hasOpenedTickets, setHasOpenedTickets] = useState(false);
@@ -131,6 +132,14 @@ const SupportShell: React.FC = () => {
                   </Suspense>
                 )}
               </TabsContent>
+              <TabsContent value="notifications" className="m-0 h-full min-h-0 overflow-hidden data-[state=inactive]:hidden">
+                <NotificationsPanel
+                  onOpen={(ticket) => {
+                    setSelectedTicket(ticket);
+                    setHasOpenedTickets(true);
+                  }}
+                />
+              </TabsContent>
               <TabsContent value="insights" className="m-0 h-full min-h-0 overflow-hidden data-[state=inactive]:hidden">
                 <InsightsPanel />
               </TabsContent>
@@ -154,7 +163,14 @@ const SupportShell: React.FC = () => {
               <TabsList className="flex h-auto w-full flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50/90 p-1.5 shadow-inner shadow-slate-200/50">
                 {sideTabs.map(({ value, label, icon: Icon }) => (
                   <TabsTrigger key={value} value={value} className="h-11 w-full justify-center rounded-xl px-0 text-xs font-semibold text-slate-500 transition duration-200 data-[state=active]:bg-white data-[state=active]:text-blue-700 data-[state=active]:shadow-[0_10px_24px_rgba(15,23,42,0.08)] lg:justify-start lg:px-3">
-                    <Icon className="h-4 w-4 lg:mr-2" />
+                    <span className="relative lg:mr-2">
+                      <Icon className="h-4 w-4" />
+                      {value === 'notifications' && notifications.length > 0 && (
+                        <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[9px] font-bold leading-none text-white">
+                          {notifications.length > 9 ? '9+' : notifications.length}
+                        </span>
+                      )}
+                    </span>
                     <span className="hidden truncate lg:inline">{label}</span>
                   </TabsTrigger>
                 ))}
@@ -163,9 +179,14 @@ const SupportShell: React.FC = () => {
 
             <div className="fixed bottom-3 right-3 z-30 md:hidden">
               <TabsList className="h-11 rounded-2xl border border-slate-200 bg-white/92 p-1 shadow-[0_18px_44px_rgba(15,23,42,0.16)] backdrop-blur-xl">
-                {sideTabs.slice(0, 4).map(({ value, label, icon: Icon }) => (
+                {sideTabs.slice(0, 5).map(({ value, label, icon: Icon }) => (
                   <TabsTrigger key={value} value={value} aria-label={label} className="h-9 rounded-xl px-2.5 text-slate-500 data-[state=active]:bg-blue-600 data-[state=active]:text-white">
-                    <Icon className="h-4 w-4" />
+                    <span className="relative">
+                      <Icon className="h-4 w-4" />
+                      {value === 'notifications' && notifications.length > 0 && (
+                        <span className="absolute -right-2 -top-2 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />
+                      )}
+                    </span>
                   </TabsTrigger>
                 ))}
               </TabsList>
@@ -248,6 +269,59 @@ const TriageQueuePanel: React.FC = () => {
           <SignalRow label="Breached requiring escalation" value={breached.filter((ticket) => ticket.assignedTo !== getEscalationTarget(ticket.assignedTo)).length} tone={breached.length ? 'red' : 'green'} />
           <SignalRow label="Open with member linked" value={openTickets.filter((ticket) => ticket.memberName).length} tone="blue" />
           <SignalRow label="Open without member context" value={openTickets.filter((ticket) => !ticket.memberName).length} tone="violet" />
+        </div>
+      </div>
+    </WorkspacePanel>
+  );
+};
+
+const NotificationsPanel: React.FC<{ onOpen: (ticket: Ticket) => void }> = ({ onOpen }) => {
+  const { notifications } = useTickets();
+  const criticalCount = notifications.filter((notification) => notification.level === 'critical').length;
+  const warningCount = notifications.filter((notification) => notification.level === 'warning').length;
+
+  return (
+    <WorkspacePanel title="Notifications" description="Owner-only SLA notifications for tickets assigned to the signed-in team member.">
+      <div className="grid gap-3 md:grid-cols-3">
+        <StatCard label="Owner Alerts" value={notifications.length} tone={notifications.length ? 'blue' : 'green'} />
+        <StatCard label="Breached" value={criticalCount} tone={criticalCount ? 'danger' : 'green'} />
+        <StatCard label="At Risk" value={warningCount} tone={warningCount ? 'blue' : 'green'} />
+      </div>
+
+      <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-[0_18px_54px_rgba(15,23,42,0.07)]">
+        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-950 px-4 py-3 text-white">
+          <h3 className="text-sm font-semibold">Ticket Owner Notifications</h3>
+          <span className="text-xs text-slate-300">{notifications.length} active</span>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {notifications.map((notification) => (
+            <button
+              key={notification.id}
+              type="button"
+              onClick={() => onOpen(notification.ticket)}
+              className="grid w-full gap-3 px-4 py-4 text-left transition hover:bg-slate-50 md:grid-cols-[1fr_auto]"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusPill value={notification.level === 'critical' ? 'Breached' : 'At Risk'} tone={notification.level === 'critical' ? 'red' : 'violet'} />
+                  <span className="text-[11px] font-mono text-slate-400">{notification.ticketId}</span>
+                </div>
+                <div className="mt-2 truncate text-sm font-semibold text-slate-950">{notification.title}</div>
+                <div className="mt-1 text-xs text-slate-500">{notification.message}</div>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5 md:justify-end">
+                <StatusPill value={notification.ticket.priority} tone={notification.ticket.priority === 'Critical' || notification.ticket.priority === 'High' ? 'red' : 'blue'} />
+                <div className="truncate text-xs font-medium text-slate-600 md:max-w-40">{notification.owner}</div>
+              </div>
+            </button>
+          ))}
+          {notifications.length === 0 && (
+            <div className="px-4 py-12 text-center">
+              <Bell className="mx-auto h-9 w-9 text-slate-300" />
+              <div className="mt-3 text-sm font-semibold text-slate-700">No owner notifications</div>
+              <div className="mt-1 text-xs text-slate-500">SLA alerts appear here only when the signed-in user owns the ticket.</div>
+            </div>
+          )}
         </div>
       </div>
     </WorkspacePanel>

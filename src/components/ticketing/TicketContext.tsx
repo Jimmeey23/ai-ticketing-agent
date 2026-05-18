@@ -1,12 +1,23 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { ASSOCIATES, getEmployee, getEscalationTarget, isTicketBreached, PRIORITY_SLA, resolveTicketAssignee, resolveTicketDepartment, Ticket } from '@/lib/ticketing-data';
 import { backendSupabase } from '@/lib/backend-supabase';
-import { toast } from '@/components/ui/sonner';
 import { useBackendAuth } from '@/contexts/BackendAuthContext';
 import { ResolvedAssignment, resolveConfiguredAssignment } from '@/lib/routing-settings';
 
+export interface TicketNotification {
+  id: string;
+  ticketId: string;
+  title: string;
+  message: string;
+  level: 'critical' | 'warning';
+  ticket: Ticket;
+  owner: string;
+  createdAt: string;
+}
+
 interface TicketContextValue {
   tickets: Ticket[];
+  notifications: TicketNotification[];
   loading: boolean;
   error: string | null;
   updateTicket: (id: string, patch: Partial<Ticket>, actor?: string) => Promise<void>;
@@ -576,12 +587,66 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return candidates.some((value) => visibleIdentityValues.has(value));
   }, [accessRole, visibleIdentityValues]);
 
+  const ownsTicket = useCallback((ticket: Ticket) => {
+    const owner = getEmployee(ticket.assignedTo);
+    const candidates = [
+      ticket.assignedTo,
+      owner?.email,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).trim().toLowerCase());
+
+    return candidates.some((value) => visibleIdentityValues.has(value));
+  }, [visibleIdentityValues]);
+
   const tickets = useMemo(() => {
     const byId = new Map<string, Ticket>();
     for (const ticket of historicTickets) byId.set(ticket.id, ticket);
     for (const ticket of liveTickets) byId.set(ticket.id, ticket);
     return dedupeAndSortTickets(Array.from(byId.values()).filter(canSeeTicket));
   }, [canSeeTicket, historicTickets, liveTickets]);
+
+  const notifications = useMemo<TicketNotification[]>(() => {
+    const now = Date.now();
+    return tickets
+      .filter((ticket) => ownsTicket(ticket))
+      .flatMap((ticket) => {
+        const dueAt = new Date(ticket.slaDueAt).getTime();
+        if (Number.isNaN(dueAt)) return [];
+
+        if (isTicketBreached(ticket, now)) {
+          return [{
+            id: `sla-breached-${ticket.id}`,
+            ticketId: ticket.id,
+            title: `SLA breached: ${ticket.title}`,
+            message: `Owner action required for ${ticket.assignedTo}. Escalation target: ${getEscalationTarget(ticket.assignedTo)}.`,
+            level: 'critical' as const,
+            ticket,
+            owner: ticket.assignedTo,
+            createdAt: ticket.slaDueAt,
+          }];
+        }
+
+        if (!['Resolved', 'Closed'].includes(ticket.status) && dueAt - now <= 2 * 60 * 60 * 1000) {
+          return [{
+            id: `sla-at-risk-${ticket.id}`,
+            ticketId: ticket.id,
+            title: `SLA at risk: ${ticket.title}`,
+            message: `Due ${new Date(ticket.slaDueAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}.`,
+            level: 'warning' as const,
+            ticket,
+            owner: ticket.assignedTo,
+            createdAt: ticket.slaDueAt,
+          }];
+        }
+
+        return [];
+      })
+      .sort((a, b) => {
+        const levelWeight = { critical: 2, warning: 1 };
+        return levelWeight[b.level] - levelWeight[a.level] || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      });
+  }, [ownsTicket, tickets]);
 
   const fetchHistoricTickets = useCallback(async () => {
     const response = await fetch('/tickets.json', { cache: 'no-store' });
@@ -590,7 +655,7 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     const rows = await response.json() as HistoricTicketRow[];
     setHistoricTickets(rows.map(mapHistoricTicket));
-  }, [canSeeTicket]);
+  }, []);
 
   const fetchTickets = useCallback(async () => {
     const { data, error } = await backendSupabase
@@ -904,14 +969,6 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const alreadyEscalated = ticket.tags.includes('sla-breached') || ticket.tags.includes('escalated');
       const target = getEscalationTarget(ticket.assignedTo);
 
-      if (import.meta.env.PROD) {
-        toast.warning(`SLA breached: ${ticket.title}`, {
-          id: `sla-${ticket.id}`,
-          description: `Escalating from ${ticket.assignedTo} to ${target}.`,
-          duration: Infinity,
-        });
-      }
-
       if (alreadyEscalated || ticket.assignedTo === target) continue;
 
       const nextTags = Array.from(new Set([...ticket.tags, 'sla-breached', 'escalated']));
@@ -934,6 +991,7 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     <TicketContext.Provider
       value={{
         tickets,
+        notifications,
         loading,
         error,
         updateTicket,
