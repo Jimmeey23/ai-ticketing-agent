@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Send, Sparkles, Bot, User as UserIcon, RotateCcw, CheckCircle2 } from 'lucide-react';
+import { Send, Sparkles, Bot, User as UserIcon, CheckCircle2 } from 'lucide-react';
 import { TicketPreviewCard } from './TicketPreviewCard';
 import { ContextPicker, Context } from './ContextPicker';
 import { useTickets } from './TicketContext';
 import { useBackendAuth } from '@/contexts/BackendAuthContext';
+import { RoutingSettings, defaultRoutingSettings, loadRoutingSettings } from '@/lib/routing-settings';
 import {
   getMomenceMemberMemberships,
   MomenceMemberOption,
@@ -34,6 +35,7 @@ import {
   ROLLOVER_REASONS,
   STUDIOS,
   TRAINERS,
+  Ticket,
 } from '@/lib/ticketing-data';
 
 interface SuggestedChip {
@@ -111,6 +113,29 @@ const GREETING: Message = {
     "I'm **Athena**, your Physique 57 India ticket intake assistant.\n\nDocument what the member, client, guest, or team member reported. I'll classify the route, category, subcategory, and urgency before asking only for missing details.",
 };
 
+const USER_TONES = [
+  {
+    avatar: 'border-blue-200 bg-white text-blue-600 shadow-[0_12px_28px_rgba(37,99,235,0.16)]',
+    bubble: 'rounded-tr-md border border-l-4 border-blue-200 border-l-blue-500 bg-white text-slate-800 shadow-[0_18px_44px_rgba(37,99,235,0.14)]',
+    more: 'text-blue-700 hover:text-blue-900',
+  },
+  {
+    avatar: 'border-red-200 bg-white text-red-600 shadow-[0_12px_28px_rgba(220,38,38,0.14)]',
+    bubble: 'rounded-tr-md border border-l-4 border-red-200 border-l-red-500 bg-white text-slate-800 shadow-[0_18px_44px_rgba(220,38,38,0.13)]',
+    more: 'text-red-700 hover:text-red-900',
+  },
+  {
+    avatar: 'border-emerald-200 bg-white text-emerald-600 shadow-[0_12px_28px_rgba(16,185,129,0.14)]',
+    bubble: 'rounded-tr-md border border-l-4 border-emerald-200 border-l-emerald-500 bg-white text-slate-800 shadow-[0_18px_44px_rgba(16,185,129,0.13)]',
+    more: 'text-emerald-700 hover:text-emerald-900',
+  },
+  {
+    avatar: 'border-violet-200 bg-white text-violet-600 shadow-[0_12px_28px_rgba(124,58,237,0.15)]',
+    bubble: 'rounded-tr-md border border-l-4 border-violet-200 border-l-violet-500 bg-white text-slate-800 shadow-[0_18px_44px_rgba(124,58,237,0.14)]',
+    more: 'text-violet-700 hover:text-violet-900',
+  },
+];
+
 function getDisplayError(error: unknown, fallback = 'Unknown error'): string {
   if (error instanceof Error) return error.message;
   if (error && typeof error === 'object') {
@@ -153,6 +178,8 @@ Primary behavior:
 - The AI must decide issue-specific fields from the inferred route, category, subcategory, current context, and member voice. Do not rely on fixed subcategory templates.
 - For issue-specific fields, return full field definitions: id, label, type, required, and options when useful.
 - Use only the application-provided constants for routes, studios, instructors, class types, categories, subcategories, associates, priorities, and option buttons.
+- Use admin-provided routing settings when present. Do not invent owners, departments, SLAs, escalation paths, locations, or employee names.
+- Ticket titles should include the most specific issue plus member/session/studio context when known, for example "AC malfunction in Studio 1 - Kwality House" or "Hosted class feedback - Ahana Power Cycle".
 - Member name/contact and class/session context must come from Momence search fields in the UI; do not ask users to type those as ordinary text when a form is used.
 - For freeze, rollover, membership, and package-specific requests, require the selected Momence member before requesting membership, and use only that member's currently active memberships.
 - Always write in third-person internal documentation language: "Member reported...", "Client requested...", "Community member stated...".
@@ -445,6 +472,13 @@ function mergeInferredContext(ctx: DetailContext, inferred: Partial<DetailContex
   const next: DetailContext = { ...ctx };
   for (const [key, value] of Object.entries(inferred)) {
     if (!value) continue;
+    if (
+      (key === 'category' || key === 'subCategory') &&
+      next.category === 'Hosted Class & Partnerships' &&
+      (value === 'General Feedback' || value === 'Other')
+    ) {
+      continue;
+    }
     if (key === 'category' && next.category !== value) {
       next.category = value;
       next.subCategory = undefined;
@@ -636,8 +670,117 @@ function buildClientDraft(ctx: DetailContext, text: string): DraftTicket {
   };
 }
 
-export const ChatInterface: React.FC = () => {
-  const { createApprovedTicket } = useTickets();
+function normalizeTicketSearchText(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter((token) => token.length > 2 && ![
+          'the',
+          'and',
+          'for',
+          'with',
+          'from',
+          'this',
+          'that',
+          'member',
+          'client',
+          'class',
+          'studio',
+          'house',
+          'kwality',
+          'kemps',
+          'corner',
+          'bandra',
+          'mumbai',
+          'bengaluru',
+          'bangalore',
+        ].includes(token))
+    )
+  );
+}
+
+function ticketCategoryFamily(category?: string | null): string {
+  const value = (category || '').toLowerCase();
+  if (/(billing|membership|pricing|refund|payment|charge)/.test(value)) return 'billing';
+  if (/(facility|equipment|repair|amenit|safety|medical|theft|operating|tech|app)/.test(value)) return 'operations';
+  if (/(trainer|instructor|class experience|progress|transformation)/.test(value)) return 'class';
+  if (/(hosted|partnership|brand)/.test(value)) return 'partnership';
+  if (/(booking|schedule|front desk|service|sales|consultation)/.test(value)) return 'service';
+  return value || 'general';
+}
+
+function hasExactIdentityMatch(ctx: DetailContext, ticket: Ticket): boolean {
+  const memberName = ctx.memberName?.trim().toLowerCase();
+  const memberContact = ctx.memberContact?.trim().toLowerCase();
+  return Boolean(
+    (memberName && ticket.memberName?.toLowerCase() === memberName) ||
+    (memberContact && ticket.memberContact?.toLowerCase() === memberContact)
+  );
+}
+
+function hasCompatibleDuplicateCategory(ctx: DetailContext, ticket: Ticket): boolean {
+  if (!ctx.category) return true;
+  return ticketCategoryFamily(ctx.category) === ticketCategoryFamily(ticket.category);
+}
+
+function findExistingSubmittedTicket(text: string, ctx: DetailContext, tickets: Ticket[]): Ticket | null {
+  const explicitId = text.match(/\b(?:P57|TKT|TK)-?[A-Z0-9-]{3,}\b/i)?.[0]?.toLowerCase();
+  if (explicitId) {
+    const byId = tickets.find((ticket) => ticket.id.toLowerCase() === explicitId);
+    if (byId) return byId;
+  }
+
+  const inputTokens = normalizeTicketSearchText([
+    text,
+    ctx.memberName,
+    ctx.memberContact,
+    ctx.studio,
+    ctx.trainer,
+    ctx.classType,
+    ctx.category,
+    ctx.subCategory,
+  ].filter(Boolean).join(' '));
+  if (inputTokens.length < 4) return null;
+
+  let best: { ticket: Ticket; score: number } | null = null;
+  for (const ticket of tickets) {
+    const exactIdentityMatch = hasExactIdentityMatch(ctx, ticket);
+    if (!exactIdentityMatch && !hasCompatibleDuplicateCategory(ctx, ticket)) continue;
+
+    const haystackTokens = normalizeTicketSearchText([
+      ticket.id,
+      ticket.title,
+      ticket.description,
+      ticket.conversationSummary,
+      ticket.category,
+      ticket.subCategory,
+      ticket.memberName,
+      ticket.memberContact,
+      ticket.studio,
+      ticket.trainer,
+      ticket.classType,
+    ].filter(Boolean).join(' '));
+    const haystack = new Set(haystackTokens);
+    const overlap = inputTokens.filter((token) => haystack.has(token)).length;
+    const hasIssueOverlap = overlap >= 3;
+    const contextBoost =
+      (exactIdentityMatch ? 0.24 : 0) +
+      (ctx.studio && ticket.studio === ctx.studio ? 0.08 : 0) +
+      (ctx.trainer && ticket.trainer === ctx.trainer ? 0.08 : 0) +
+      (ctx.sessionId && ticket.sourceRef?.includes(ctx.sessionId) ? 0.18 : 0);
+    const score = overlap / Math.max(8, Math.min(inputTokens.length, haystackTokens.length)) + contextBoost;
+    const threshold = exactIdentityMatch ? 0.58 : 0.66;
+    if (hasIssueOverlap && score >= threshold && (!best || score > best.score)) best = { ticket, score };
+  }
+
+  return best?.ticket || null;
+}
+
+export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) => void; resetVersion?: number }> = ({ onOpenExistingTicket, resetVersion = 0 }) => {
+  const { createApprovedTicket, tickets, setSelectedTicket } = useTickets();
   const { user } = useBackendAuth();
   const reporterName = getReporterName(user);
   const [messages, setMessages] = useState<Message[]>([GREETING]);
@@ -646,9 +789,11 @@ export const ChatInterface: React.FC = () => {
   const [context, setContext] = useState<DetailContext>({});
   const [pendingSingleField, setPendingSingleField] = useState<DetailFormField | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [routingSettings, setRoutingSettings] = useState<RoutingSettings>(() => defaultRoutingSettings());
   const publishingRef = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastResetVersionRef = useRef(resetVersion);
 
   useEffect(() => {
     setContext((current) => {
@@ -660,6 +805,16 @@ export const ChatInterface: React.FC = () => {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, loading]);
+
+  useEffect(() => {
+    let mounted = true;
+    loadRoutingSettings().then((settings) => {
+      if (mounted) setRoutingSettings(settings);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const buildContextPreamble = (ctx: DetailContext) => {
     const parts: string[] = [];
@@ -725,6 +880,20 @@ export const ChatInterface: React.FC = () => {
 
     try {
       setLoading(true);
+      const existingTicket = findExistingSubmittedTicket(capturedVoice || text, activeContext, tickets);
+      if (existingTicket) {
+        setSelectedTicket(existingTicket);
+        onOpenExistingTicket?.(existingTicket);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `duplicate-${Date.now()}`,
+            role: 'assistant',
+            content: `Possible existing ticket: **${existingTicket.id}** — ${existingTicket.title}. I opened it for reference, but I will still draft a new ticket below so you can proceed if this is a separate issue.`,
+          },
+        ]);
+      }
+
       const userMessages = newMessages.filter((m) => m.id !== 'greet').slice(-8);
       const firstUserIdx = userMessages.findIndex((m) => m.role === 'user');
       const apiMessages = userMessages.map((m, idx) => ({
@@ -750,7 +919,16 @@ export const ChatInterface: React.FC = () => {
             instructors: TRAINERS,
             classTypes: CLASS_TYPES,
             categories: CATEGORIES,
+            routingRules: routingSettings.routingRules.filter((rule) => rule.active).slice(0, 260),
+            departments: routingSettings.departments.filter((department) => department.active).map((department) => department.name),
+            locations: routingSettings.locations.filter((location) => location.active).map((location) => location.name),
             associates: ASSOCIATES.map((associate) => associate.name),
+            employees: routingSettings.employees.filter((employee) => employee.active).map((employee) => ({
+              name: employee.name,
+              department: employee.department,
+              location: employee.location,
+              manager: employee.manager,
+            })),
             priorities: Object.keys(PRIORITY_SLA),
             sentiments: MEMBER_SENTIMENT_OPTIONS,
           },
@@ -783,9 +961,21 @@ export const ChatInterface: React.FC = () => {
         : null;
       const finalDetailForm = detailForm || parsedQuestionForm;
       const remainingMissingFields = getMissingIntakeFields(responseContext);
-      const ticket = finalDetailForm || data?.needsMoreInfo || remainingMissingFields.length > 0
+      let ticket = finalDetailForm || data?.needsMoreInfo || remainingMissingFields.length > 0
         ? null
         : data?.ticket || buildClientDraft(responseContext, text);
+      if (
+        ticket &&
+        responseContext.category === 'Hosted Class & Partnerships' &&
+        (ticket.category === 'General Feedback' || ticket.subCategory === 'Other')
+      ) {
+        ticket = {
+          ...ticket,
+          category: 'Hosted Class & Partnerships',
+          subCategory: responseContext.subCategory || 'Hosted Class Feedback',
+          tags: Array.from(new Set([...(ticket.tags || []), 'hosted-class', 'partnership-feedback'])),
+        };
+      }
       if (ticket) {
         const syncedContext = contextFromDraft(ticket, responseContext);
         activeContext = syncedContext;
@@ -846,6 +1036,12 @@ export const ChatInterface: React.FC = () => {
     setConversationId(null);
     setLoading(false);
   };
+
+  useEffect(() => {
+    if (resetVersion === lastResetVersionRef.current) return;
+    lastResetVersionRef.current = resetVersion;
+    resetChat();
+  }, [resetVersion, reporterName]);
 
   const submitDetailForm = (values: Record<string, string>, form?: DetailForm) => {
     let nextContext: DetailContext = { ...context };
@@ -944,38 +1140,13 @@ export const ChatInterface: React.FC = () => {
   };
 
   return (
-    <div className="flex h-full flex-col bg-[#f8fafc] text-stone-950 dark:bg-stone-950 dark:text-stone-50">
-      <div className="flex-shrink-0 border-b border-slate-200 bg-white px-4 py-3 dark:border-stone-800 dark:bg-stone-950 sm:px-6">
-        <div className="mx-auto flex w-full max-w-5xl items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-blue-100 bg-blue-600 text-white shadow-sm dark:border-blue-300/20">
-              <Bot className="h-5 w-5" />
-              <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-500 shadow-sm dark:border-stone-950" />
-            </div>
-            <div>
-              <h2 className="flex items-center gap-1.5 text-base font-semibold text-stone-950 dark:text-stone-50">
-                Athena <Sparkles className="h-3.5 w-3.5 text-blue-600 dark:text-blue-300" />
-              </h2>
-              <p className="text-[11px] text-stone-500 dark:text-stone-400">
-                Operations intelligence · Physique 57 India
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={resetChat}
-            className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600 transition hover:border-blue-300 hover:bg-blue-50 hover:text-stone-950 dark:border-stone-800 dark:bg-stone-900 dark:hover:border-blue-700 dark:hover:text-stone-100"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            New chat
-          </button>
-        </div>
-      </div>
-
-      <div ref={scrollRef} className="mx-auto w-full max-w-5xl flex-1 space-y-4 overflow-y-auto px-4 py-6 sm:px-6">
-        {messages.map((m) => (
+    <div className="flex h-full flex-col bg-transparent text-stone-950">
+      <div ref={scrollRef} className="mx-auto w-full max-w-6xl flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-6 lg:py-5">
+        {messages.map((m, index) => (
           <MessageBubble
             key={m.id}
             message={m}
+            index={index}
             onChipClick={handleChipClick}
             onConfirm={publishDraft}
             onEdit={refineDraft}
@@ -987,20 +1158,22 @@ export const ChatInterface: React.FC = () => {
         {loading && <TypingIndicator />}
       </div>
 
-      <div className="flex-shrink-0 border-t border-slate-200 bg-white px-4 pb-1 pt-2 dark:border-stone-800 dark:bg-stone-950 sm:px-6">
-        <div className="mx-auto w-full max-w-5xl">
-          <div className="mb-2 flex items-center gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">
+      <div className="z-10 flex-shrink-0 border-t border-slate-200/80 bg-white/76 px-4 py-2 shadow-[0_-18px_50px_rgba(15,23,42,0.05)] backdrop-blur-xl sm:px-6">
+        <div className="mx-auto flex w-full max-w-6xl items-center gap-3 rounded-xl border border-slate-200 bg-white/80 px-3 py-2 shadow-[0_10px_28px_rgba(15,23,42,0.06)]">
+          <div className="flex shrink-0 items-center gap-3">
+            <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-blue-600">
               Context
             </span>
-            <div className="h-px flex-1 bg-stone-200 dark:bg-stone-800" />
+            <div className="hidden h-5 w-px bg-slate-200 sm:block" />
           </div>
-          <ContextPicker context={context} onChange={(next) => setContext((current) => ({ ...current, ...next }))} />
+          <div className="min-w-0 flex-1 overflow-x-auto pb-0.5">
+            <ContextPicker context={context} onChange={(next) => setContext((current) => ({ ...current, ...next }))} />
+          </div>
         </div>
       </div>
 
-      <div className="flex-shrink-0 border-t border-slate-200 bg-white px-4 py-3 dark:border-stone-800 dark:bg-stone-950 sm:px-6">
-        <div className="mx-auto flex w-full max-w-5xl items-end gap-2">
+      <div className="z-10 flex-shrink-0 bg-white/88 px-4 py-2.5 backdrop-blur-xl sm:px-6">
+        <div className="mx-auto flex w-full max-w-6xl items-end gap-3">
           <div className="flex-1 relative">
             <textarea
               ref={textareaRef}
@@ -1014,19 +1187,19 @@ export const ChatInterface: React.FC = () => {
                 }
               }}
               placeholder="Describe the incident, feedback or complaint…"
-              className="max-h-32 w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-3 pr-3 text-sm text-stone-950 shadow-sm outline-none transition placeholder:text-stone-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-100 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
+              className="max-h-28 w-full resize-none rounded-2xl border border-slate-200 bg-white px-4 py-3 pr-4 text-sm text-slate-950 shadow-[0_12px_34px_rgba(15,23,42,0.07)] outline-none transition duration-200 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15"
               style={{ minHeight: '48px' }}
             />
           </div>
           <button
             onClick={() => sendMessage(input)}
             disabled={!input.trim() || loading}
-            className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_14px_30px_rgba(15,23,42,0.2)] transition duration-200 hover:-translate-y-0.5 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-35 enabled:animate-p57-send-ready"
           >
             <Send className="w-4 h-4" />
           </button>
         </div>
-        <p className="mx-auto mt-1.5 w-full max-w-5xl px-1 text-[10px] text-stone-400">
+        <p className="mx-auto mt-1 w-full max-w-6xl px-1 text-[10px] font-medium text-stone-400">
           Enter to send · Shift+Enter for new line
         </p>
       </div>
@@ -1036,15 +1209,18 @@ export const ChatInterface: React.FC = () => {
 
 const MessageBubble: React.FC<{
   message: Message;
+  index: number;
   onChipClick: (chip: SuggestedChip) => void;
   onConfirm: (messageId: string, draft: DraftTicket) => void;
   onEdit: (draft: DraftTicket) => void;
   onSaveEdit: (messageId: string, draft: DraftTicket) => void;
   onDetailFormSubmit: (values: Record<string, string>, form?: DetailForm) => void;
   context: DetailContext;
-}> = ({ message, onChipClick, onConfirm, onEdit, onSaveEdit, onDetailFormSubmit, context }) => {
+}> = ({ message, index, onChipClick, onConfirm, onEdit, onSaveEdit, onDetailFormSubmit, context }) => {
   const isUser = message.role === 'user';
+  const userTone = USER_TONES[index % USER_TONES.length];
   const visibleChips = (message.suggestedChips || []).filter((chip) => !context[chip.field]);
+  const [expanded, setExpanded] = useState(false);
 
   const renderContent = (text: string) => {
     const lines = text.split('\n');
@@ -1061,27 +1237,49 @@ const MessageBubble: React.FC<{
       </React.Fragment>
     ));
   };
+  const contentLines = message.content.split('\n');
+  const shouldCollapse =
+    isUser &&
+    !message.ticket &&
+    !message.detailForm &&
+    (contentLines.length > 3 || message.content.length > 260);
+  const previewContent = (() => {
+    if (!shouldCollapse || expanded) return message.content;
+    const firstLines = contentLines.slice(0, 3).join('\n');
+    return firstLines.length > 260 ? `${firstLines.slice(0, 260).trimEnd()}...` : `${firstLines.trimEnd()}...`;
+  })();
 
   return (
-    <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
+    <div className={`animate-p57-fade-up flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
       <div
-        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg shadow-sm ${
+        className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ${
           isUser
-            ? 'bg-blue-600 text-white'
-            : 'border border-slate-200 bg-white text-blue-700 dark:border-blue-300/20 dark:bg-stone-900 dark:text-blue-200'
+            ? userTone.avatar
+            : 'border border-slate-200 bg-white text-blue-600'
         }`}
       >
         {isUser ? <UserIcon className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
       </div>
       <div className={`max-w-[86%] flex-1 ${message.detailForm || message.ticket ? 'sm:max-w-[92%]' : 'sm:max-w-[74%]'} ${isUser ? 'flex flex-col items-end' : ''}`}>
         <div
-          className={`inline-block rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm transition duration-200 ${
+          className={`inline-block rounded-[1.35rem] px-5 py-3 text-[15px] leading-relaxed shadow-sm transition duration-200 ${
             isUser
-              ? 'rounded-tr-md bg-blue-600 text-white'
-              : 'rounded-tl-md border border-slate-200 bg-white text-stone-800 dark:border-blue-300/15 dark:bg-stone-900 dark:text-stone-200'
+              ? userTone.bubble
+              : 'rounded-tl-md border border-l-4 border-slate-200 border-l-blue-500 bg-white/94 text-slate-800 shadow-[0_18px_54px_rgba(15,23,42,0.08)] backdrop-blur'
           }`}
         >
-          {renderContent(message.content)}
+          {renderContent(previewContent)}
+          {shouldCollapse && (
+            <button
+              type="button"
+              onClick={() => setExpanded((current) => !current)}
+              className={`mt-2 block text-xs font-semibold underline-offset-4 hover:underline ${
+                isUser ? userTone.more : 'text-blue-700 hover:text-blue-900'
+              }`}
+            >
+              {expanded ? 'Show less' : 'Show more'}
+            </button>
+          )}
         </div>
 
         {visibleChips.length > 0 && !message.ticket && (
@@ -1090,7 +1288,7 @@ const MessageBubble: React.FC<{
               <button
                 key={i}
                 onClick={() => onChipClick(c)}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-stone-700 shadow-sm transition hover:border-blue-400 hover:bg-blue-50 hover:text-stone-950 dark:border-blue-300/15 dark:bg-stone-900 dark:text-stone-300 dark:hover:border-blue-600 dark:hover:bg-stone-800 dark:hover:text-white"
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50 hover:text-slate-950"
               >
                 {c.label}
               </button>
@@ -1126,14 +1324,14 @@ const MessageBubble: React.FC<{
 };
 
 const TypingIndicator: React.FC = () => (
-  <div className="flex gap-2.5">
-    <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-950 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-100">
+  <div className="animate-p57-fade-up flex gap-2.5">
+    <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-blue-600 shadow-sm">
       <Bot className="w-4 h-4" />
     </div>
-    <div className="inline-flex items-center gap-1 rounded-2xl rounded-tl-sm border border-stone-200 bg-white px-4 py-3 shadow-sm dark:border-stone-800 dark:bg-stone-900">
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-500" style={{ animationDelay: '0ms' }} />
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-500" style={{ animationDelay: '150ms' }} />
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-500" style={{ animationDelay: '300ms' }} />
+    <div className="inline-flex items-center gap-1 rounded-[1.35rem] rounded-tl-sm border border-slate-200 bg-white/94 px-4 py-3 shadow-[0_18px_54px_rgba(15,23,42,0.08)]">
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-600" style={{ animationDelay: '0ms' }} />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-600" style={{ animationDelay: '150ms' }} />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-600" style={{ animationDelay: '300ms' }} />
     </div>
   </div>
 );
@@ -1186,24 +1384,24 @@ const DetailCaptureForm: React.FC<{
 
   return (
     <form
-      className="mt-3 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-blue-300/15 dark:bg-stone-900"
+      className="mt-3 w-full overflow-hidden rounded-3xl border border-slate-200 bg-white/95 shadow-[0_22px_70px_rgba(15,23,42,0.1)] backdrop-blur"
       onSubmit={(event) => {
         event.preventDefault();
         if (canSubmit) onSubmit(values, form);
       }}
     >
-      <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 dark:border-blue-300/10 dark:bg-white/[0.03]">
+      <div className="border-b border-slate-200 bg-slate-50/90 px-5 py-4">
         <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
+          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
             <Sparkles className="h-4 w-4" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold tracking-tight text-stone-950 dark:text-stone-50">{form.title}</h3>
-            {form.description && <p className="mt-1 max-w-2xl text-xs leading-relaxed text-stone-500 dark:text-stone-400">{form.description}</p>}
+            <h3 className="text-sm font-semibold tracking-tight text-stone-950">{form.title}</h3>
+            {form.description && <p className="mt-1 max-w-2xl text-xs leading-relaxed text-stone-500">{form.description}</p>}
           </div>
         </div>
       </div>
-      <div className="grid gap-3 p-4 md:grid-cols-2">
+      <div className="grid gap-3 p-5 md:grid-cols-2">
         {hasMemberFields && (
           <MomenceMemberFormField
             values={values}
@@ -1252,9 +1450,9 @@ const DetailCaptureForm: React.FC<{
           return (
             <label
               key={id}
-              className={`group rounded-xl border border-slate-200 bg-white p-3 transition duration-200 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-50 dark:border-blue-300/10 dark:bg-white/[0.03] ${field.type === 'textarea' ? 'md:col-span-2' : ''}`}
+              className={`group rounded-2xl border border-slate-200 bg-white p-3 transition duration-200 focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 ${field.type === 'textarea' ? 'md:col-span-2' : ''}`}
             >
-              <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+              <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.14em] text-stone-500">
                 {field.label}
                 {field.required ? <span className="text-blue-600"> *</span> : ''}
               </span>
@@ -1263,7 +1461,7 @@ const DetailCaptureForm: React.FC<{
                   value={values[id] || ''}
                   onChange={(event) => setValue(id, event.target.value)}
                   disabled={(field.id === 'membership' && !values.memberId) || (field.id === 'subCategory' && !values.category)}
-                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-100 dark:focus:border-blue-700 dark:focus:ring-blue-900/40 dark:disabled:bg-stone-900"
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400"
                 >
                   <option value="">
                     {field.id === 'membership' && !values.memberId
@@ -1281,7 +1479,7 @@ const DetailCaptureForm: React.FC<{
                   value={values[id] || ''}
                   onChange={(event) => setValue(id, event.target.value)}
                   rows={3}
-                  className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-stone-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-100 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
+                  className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-stone-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
                   placeholder="Capture what the member stated..."
                 />
               ) : (
@@ -1289,7 +1487,7 @@ const DetailCaptureForm: React.FC<{
                   type={field.type === 'date' || field.type === 'datetime-local' || field.type === 'number' ? field.type : 'text'}
                   value={values[id] || ''}
                   onChange={(event) => setValue(id, event.target.value)}
-                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-100 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
                   placeholder={field.label}
                 />
               )}
@@ -1297,14 +1495,14 @@ const DetailCaptureForm: React.FC<{
           );
         })}
       </div>
-      <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-4 py-3 dark:border-blue-300/10 dark:bg-white/[0.02]">
+      <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50/90 px-5 py-4">
         <span className="text-[11px] text-stone-400">
           {form.fields.filter((field) => field.required).length} required fields
         </span>
         <button
           type="submit"
           disabled={!canSubmit}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-semibold text-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {form.submitLabel || 'Continue'}
         </button>
@@ -1364,14 +1562,14 @@ const MomenceMemberFormField: React.FC<{
   }, [query, selectedMemberId, values.memberName]);
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-3 transition focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-50 dark:border-blue-300/10 dark:bg-white/[0.03] md:col-span-2">
-      <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+    <div className="rounded-2xl border border-slate-200 bg-white p-3 transition focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 md:col-span-2">
+      <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.14em] text-stone-500">
         Momence Member *
       </span>
       <input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-100 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
+        className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
         placeholder="Search Momence by member name, email, or phone"
       />
       {error && <div className="mt-1 text-[11px] text-red-600">{error}</div>}
@@ -1382,7 +1580,7 @@ const MomenceMemberFormField: React.FC<{
         </div>
       )}
       {options.length > 0 && (
-        <div className="mt-2 max-h-44 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg shadow-slate-200/70 dark:border-stone-800 dark:bg-stone-900 dark:shadow-black/30">
+        <div className="mt-2 max-h-44 overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-[0_18px_44px_rgba(15,23,42,0.1)]">
           {options.map((option) => (
             <button
               key={option.id}
@@ -1394,9 +1592,9 @@ const MomenceMemberFormField: React.FC<{
                 await onSelect(option);
                 setOptions([]);
               }}
-              className="block w-full border-b border-stone-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-stone-50 dark:border-stone-800 dark:hover:bg-stone-800"
+              className="block w-full border-b border-stone-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-slate-50"
             >
-              <div className="font-semibold text-stone-900 dark:text-stone-100">{option.label}</div>
+              <div className="font-semibold text-stone-900">{option.label}</div>
               <div className="mt-0.5 text-[11px] text-stone-500">{option.description}</div>
             </button>
           ))}
@@ -1427,14 +1625,14 @@ const MomenceSessionFormField: React.FC<{
   }, [query]);
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-3 transition focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-50 dark:border-blue-300/10 dark:bg-white/[0.03] md:col-span-2">
-      <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+    <div className="rounded-2xl border border-slate-200 bg-white p-3 transition focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 md:col-span-2">
+      <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.14em] text-stone-500">
         Momence Class / Session *
       </span>
       <input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-100 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
+        className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
         placeholder="Search Momence sessions by class, instructor, studio, or date"
       />
       {error && <div className="mt-1 text-[11px] text-red-600">{error}</div>}
@@ -1447,7 +1645,7 @@ const MomenceSessionFormField: React.FC<{
         </div>
       )}
       {options.length > 0 && (
-        <div className="mt-2 max-h-44 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg shadow-slate-200/70 dark:border-stone-800 dark:bg-stone-900 dark:shadow-black/30">
+        <div className="mt-2 max-h-44 overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-[0_18px_44px_rgba(15,23,42,0.1)]">
           {options.map((option) => (
             <button
               key={option.id}
@@ -1457,9 +1655,9 @@ const MomenceSessionFormField: React.FC<{
                 setQuery(option.label);
                 setOptions([]);
               }}
-              className="block w-full border-b border-stone-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-stone-50 dark:border-stone-800 dark:hover:bg-stone-800"
+              className="block w-full border-b border-stone-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-slate-50"
             >
-              <div className="font-semibold text-stone-900 dark:text-stone-100">{option.label}</div>
+              <div className="font-semibold text-stone-900">{option.label}</div>
               <div className="mt-0.5 text-[11px] text-stone-500">{option.description}</div>
             </button>
           ))}

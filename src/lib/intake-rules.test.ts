@@ -181,6 +181,28 @@ describe('intake publishability rules', () => {
       subCategory: 'Prospect Conversion Opportunity',
       priority: 'Medium',
     });
+
+    expect(
+      inferIntakeContextFromText(
+        [
+          "Host Class Name: Ahana's Powercycle Hosted Class.",
+          'Date: 17th May',
+          'Start Time: 11:30 AM',
+          'Trainer Name: Rohan',
+          'Location: Kwality House, Kemps Corner.',
+          'Attendees: 10',
+          'Comments/Feedback:',
+          'Client Taneeya Rele requested details regarding our classes, which have been shared via WhatsApp.',
+          'Several attendees may opt for drop-in classes or Single Classes.',
+        ].join('\n')
+      )
+    ).toMatchObject({
+      intakeRoute: 'Feedback',
+      category: 'Hosted Class & Partnerships',
+      subCategory: 'Prospect Conversion Opportunity',
+      priority: 'Medium',
+      studio: 'Kwality House, Kemps Corner',
+    });
   });
 
   it('requires Momence class search for class-related feedback before drafting', () => {

@@ -41,7 +41,7 @@ interface MomenceSearchOption {
 
 export const ContextPicker: React.FC<Props> = ({ context, onChange }) => {
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex w-max flex-nowrap items-center gap-2">
       <AsyncPicker
         icon={<User className="w-3 h-3" />}
         label="Member"
@@ -158,7 +158,7 @@ export const ContextPicker: React.FC<Props> = ({ context, onChange }) => {
         value={context.urgencyReason || ''}
         onChange={(event) => onChange({ ...context, urgencyReason: event.target.value })}
         placeholder="Urgency reason"
-        className="h-[26px] min-w-[190px] rounded-md border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600 outline-none transition placeholder:text-slate-400 focus:border-blue-300 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:focus:border-blue-700 dark:focus:ring-blue-900/40"
+        className="h-8 min-w-[200px] rounded-full border border-slate-200 bg-white/90 px-3 text-xs font-semibold text-stone-700 shadow-sm outline-none transition duration-200 placeholder:text-stone-400 hover:border-blue-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15"
       />
     </div>
   );
@@ -211,10 +211,10 @@ const AsyncPicker = <TOption extends MomenceSearchOption,>({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`inline-flex min-w-0 max-w-[190px] items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md border transition ${
+          className={`inline-flex h-8 min-w-0 max-w-[210px] items-center gap-1.5 rounded-full border px-3 text-xs font-semibold shadow-sm transition duration-200 ${
             value
-              ? 'bg-blue-100 dark:bg-blue-950 border-blue-300 dark:border-blue-700 text-blue-800 dark:text-blue-200'
-              : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-blue-300'
+              ? 'border-stone-950 bg-stone-950 text-white shadow-[0_12px_24px_rgba(15,23,42,0.16)]'
+              : 'border-slate-200 bg-white/90 text-stone-600 hover:-translate-y-0.5 hover:border-blue-200 hover:bg-slate-50 hover:text-stone-950'
           }`}
         >
           <span className="flex-shrink-0">{icon}</span>
@@ -238,7 +238,7 @@ const AsyncPicker = <TOption extends MomenceSearchOption,>({
         align="start"
         sideOffset={8}
         collisionPadding={12}
-        className="w-96 max-w-[calc(100vw-2rem)] p-0 overflow-hidden"
+        className="w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border-slate-200 bg-white/96 p-0 shadow-[0_24px_70px_rgba(15,23,42,0.14)] backdrop-blur-xl"
       >
         <Command shouldFilter={false}>
           <CommandInput
@@ -269,9 +269,9 @@ const AsyncPicker = <TOption extends MomenceSearchOption,>({
                 className="items-start whitespace-normal break-words text-xs leading-snug"
               >
                 <div className="min-w-0">
-                  <div className="font-medium text-slate-900 dark:text-slate-100">{option.label}</div>
+                  <div className="font-semibold text-stone-900">{option.label}</div>
                   {option.description && (
-                    <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">{option.description}</div>
+                    <div className="mt-0.5 text-[11px] text-stone-500">{option.description}</div>
                   )}
                 </div>
               </CommandItem>
@@ -298,10 +298,10 @@ const Picker: React.FC<{
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`inline-flex min-w-0 max-w-[160px] items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md border transition ${
+          className={`inline-flex h-8 min-w-0 max-w-[180px] items-center gap-1.5 rounded-full border px-3 text-xs font-semibold shadow-sm transition duration-200 ${
             value
-              ? 'bg-violet-100 dark:bg-violet-950 border-violet-300 dark:border-violet-700 text-violet-800 dark:text-violet-200'
-              : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-violet-300'
+              ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-[0_10px_22px_rgba(37,99,235,0.14)]'
+              : 'border-slate-200 bg-white/90 text-stone-600 hover:-translate-y-0.5 hover:border-blue-200 hover:bg-slate-50 hover:text-stone-950'
           }`}
         >
           <span className="flex-shrink-0">{icon}</span>
@@ -325,7 +325,7 @@ const Picker: React.FC<{
         align="start"
         sideOffset={8}
         collisionPadding={12}
-        className="w-80 max-w-[calc(100vw-2rem)] p-0 overflow-hidden"
+        className="w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border-slate-200 bg-white/96 p-0 shadow-[0_24px_70px_rgba(15,23,42,0.14)] backdrop-blur-xl"
       >
         <Command>
           <CommandInput placeholder={`Search ${label.toLowerCase()}...`} className="text-xs" />

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Athena logo</title>
+  <desc id="desc">Circular Athena owl badge for Physique 57 support agent.</desc>
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#142a55"/>
+      <stop offset="62%" stop-color="#071d3b"/>
+      <stop offset="100%" stop-color="#180826"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff2a7"/>
+      <stop offset="48%" stop-color="#d6aa3d"/>
+      <stop offset="100%" stop-color="#8f681b"/>
+    </linearGradient>
+  </defs>
+  <circle cx="256" cy="256" r="248" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="228" fill="none" stroke="url(#gold)" stroke-width="13"/>
+  <circle cx="256" cy="256" r="202" fill="none" stroke="url(#gold)" stroke-width="5" opacity=".95"/>
+  <g fill="none" stroke="url(#gold)" stroke-width="5" opacity=".98">
+    <path d="M89 160a206 206 0 0 1 334 0"/>
+    <path d="M89 352a206 206 0 0 0 334 0"/>
+  </g>
+  <g fill="none" stroke="url(#gold)" stroke-width="4" opacity=".82">
+    <path d="M111 178h42m206 0h42M101 206h39m232 0h39M93 236h34m258 0h34M93 276h34m258 0h34M101 306h39m232 0h39"/>
+    <path d="M151 192l-42 24m252-24 42 24M139 246H91m282 0h48M151 320l-42-24m252 24 42-24"/>
+  </g>
+  <g fill="url(#gold)">
+    <path d="M256 118c-46 6-79 34-94 78 23-19 48-31 76-33l18-45Zm0 0c46 6 79 34 94 78-23-19-48-31-76-33l-18-45Z"/>
+    <path d="M151 181c-18 13-37 24-62 27 18 24 50 35 97 34 18 0 35-2 52-6-31-19-60-37-87-55Zm210 0c18 13 37 24 62 27-18 24-50 35-97 34-18 0-35-2-52-6 31-19 60-37 87-55Z"/>
+    <path d="M132 232c28 23 67 32 118 29-31 22-70 32-119 29-22-1-41-7-57-18 22 0 41-14 58-40Zm248 0c-28 23-67 32-118 29 31 22 70 32 119 29 22-1 41-7 57-18-22 0-41-14-58-40Z"/>
+    <path d="M177 303c25 5 50-2 74-20-4 39-18 72-43 99l-31-79Zm158 0c-25 5-50-2-74-20 4 39 18 72 43 99l31-79Z"/>
+    <path d="M256 164c-39 0-70 31-70 70 0 23 11 44 29 57l41 85 41-85c18-13 29-34 29-57 0-39-31-70-70-70Zm-31 81a22 22 0 1 1 0-44 22 22 0 0 1 0 44Zm62 0a22 22 0 1 1 0-44 22 22 0 0 1 0 44Z"/>
+  </g>
+  <g fill="#071d3b">
+    <circle cx="225" cy="223" r="9"/>
+    <circle cx="287" cy="223" r="9"/>
+    <path d="M256 236l19 22h-38l19-22Z"/>
+  </g>
+  <g fill="none" stroke="url(#gold)" stroke-width="3" stroke-linecap="round" opacity=".74">
+    <path d="M216 139v-24m16 20v-34m16 31V94m16 38V94m16 41v-34m16 38v-24"/>
+    <path d="M183 167c-17-20-34-29-51-28m197 28c17-20 34-29 51-28"/>
+  </g>
+</svg>

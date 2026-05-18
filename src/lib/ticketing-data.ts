@@ -114,51 +114,40 @@ export const MEMBERSHIPS = [
 ];
 
 export const ASSOCIATES = [
-  { name: 'Akshay Rane', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Zaheer Agarbattiwala', role: 'Studio Associate', team: 'Operations' },
-  { name: '-', role: 'Unassigned', team: 'Operations' },
-  { name: 'Zahur Shaikh', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Tahira Sayyed', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Imran Shaikh', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Deesha Changwani', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Admin Admin', role: 'Admin', team: 'Administration' },
-  { name: 'Nadiya Shaikh', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Shipra Bhika', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Manisha Rathod', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Sheetal Kataria', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Priyanka Abnave', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Prathap Kp', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Api Serou', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Pavanthika', role: 'Studio Associate', team: 'Operations' },
-  { name: 'Santhosh Kumar', role: 'Studio Associate', team: 'Operations' },
+  { name: 'Yashas K', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'yashas@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Shifa Ali' },
+  { name: 'Pujal Jathar', role: 'Sr. Finance & Accounts Executive', team: 'Accounts', email: 'pujal@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Sachin Nalawade' },
+  { name: 'Rasika Kalambe', role: 'Accounts Executive', team: 'Accounts', email: 'rasika@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Sachin Nalawade' },
+  { name: 'Sashi Singh', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'sashi@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Shifa Ali' },
+  { name: 'Deesha Changwani', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'deesha@physique57mumbai.com', location: 'Physique 57, Bandra', manager: 'Jimmeey Gondaa' },
+  { name: 'Vahishta Fitter', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'vahishta@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Jimmeey Gondaa' },
+  { name: 'Nadiya Shaikh', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'nadiya@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Jimmeey Gondaa' },
+  { name: 'Saachi Shetty', role: 'Marketing Lead', team: 'Marketing', email: 'saachi.s@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Shifa Ali' },
+  { name: 'Zaheer Agarbattiwala', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'zaheer@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Jimmeey Gondaa' },
+  { name: 'Nunu Yeptomi', role: 'CSA', team: 'Customer Service', email: 'nunu@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Shifa Ali' },
+  { name: 'Sachin Nalawade', role: 'Accounts Assistant', team: 'Accounts', email: 'sachin@physique57mumbai.com', location: 'Physique 57, India', manager: 'Mitali Kumar' },
+  { name: 'Saachi Shetty - Operations', role: 'Senior Operations Manager', team: 'Operations', email: 'saachi@physique57india.com', location: 'Physique 57, Mumbai', manager: 'Mitali Kumar' },
+  { name: 'Taahira Sayyed', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'tahira@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Jimmeey Gondaa' },
+  { name: 'Api Serou', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'api@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Shifa Ali' },
+  { name: 'Prathap K P', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'prathap@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Shifa Ali' },
+  { name: 'Sheetal Kataria', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'sheetal@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Jimmeey Gondaa' },
+  { name: 'Imran Shaikh', role: 'Sr. Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'imran@physique57mumbai.com', location: 'Physique 57, Bandra', manager: 'Jimmeey Gondaa' },
+  { name: 'Sagar Ingole', role: 'Associate', team: 'Operations', email: 'accounts@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Zahur Shaikh' },
+  { name: 'Vivaran Dhasmana', role: 'Trainer', team: 'Training', email: 'vivaran@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Anisha Shah' },
+  { name: 'Shipra Pinge', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'shipra@physique57mumbai.com', location: 'Physique 57, Bandra', manager: 'Jimmeey Gondaa' },
+  { name: 'Gaurav Sogam', role: 'Accounts Assistant', team: 'Accounts', email: 'gaurav@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Sachin Nalawade' },
+  { name: 'Pushyank Nahar', role: 'Trainer', team: 'Training', email: 'pushyank@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Anisha Shah' },
+  { name: 'Shifa Ali', role: 'Regional Operations Head - South', team: 'Management', email: 'shifa@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Mitali Kumar' },
+  { name: 'Akshay Rane', role: 'Sr. Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'akshay@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Jimmeey Gondaa' },
+  { name: 'Mrigakshi Jaiswal', role: 'Trainer', team: 'Training', email: 'mrigakshi@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Anisha Shah' },
+  { name: 'Jimmeey Gondaa', role: 'Head - Sales & Client Services', team: 'Sales & Client Servicing', email: 'jimmeey@physique57india.com', location: 'Physique 57, Mumbai', manager: 'Mitali Kumar' },
+  { name: 'Zahur Shaikh', role: 'Studio Coordinator', team: 'Operations', email: 'zahur@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Saachi Shetty - Operations' },
+  { name: 'Anisha Shah', role: 'Master Trainer', team: 'Training', email: 'anisha@physique57india.com', location: 'Physique 57, Mumbai', manager: 'Mitali Kumar' },
+  { name: 'Mitali Kumar', role: 'Chief Operating Officer', team: 'Management', email: 'mitali@physique57india.com', location: 'Physique 57, Mumbai', manager: 'Mitali Kumar' },
 ];
 
-export const REPORTING_HIERARCHY: Record<string, string> = {
-  'Akshay Rane': 'Aditya Verma',
-  'Zaheer Agarbattiwala': 'Aditya Verma',
-  'Zahur Shaikh': 'Aditya Verma',
-  'Tahira Sayyed': 'Aditya Verma',
-  'Imran Shaikh': 'Aditya Verma',
-  'Deesha Changwani': 'Aditya Verma',
-  'Nadiya Shaikh': 'Aditya Verma',
-  'Shipra Bhika': 'Aditya Verma',
-  'Manisha Rathod': 'Aditya Verma',
-  'Sheetal Kataria': 'Aditya Verma',
-  'Priyanka Abnave': 'Aditya Verma',
-  'Prathap Kp': 'Aditya Verma',
-  'Api Serou': 'Aditya Verma',
-  'Pavanthika': 'Aditya Verma',
-  'Santhosh Kumar': 'Aditya Verma',
-  'Aditya Verma': 'Admin Admin',
-  'Sanya Iyer': 'Admin Admin',
-  'Priya Sharma': 'Admin Admin',
-  'Rahul Mehta': 'Admin Admin',
-  'Neha Kapoor': 'Admin Admin',
-  'Vikram Singh': 'Admin Admin',
-  'Arjun Nair': 'Admin Admin',
-  '-': 'Admin Admin',
-  Unassigned: 'Admin Admin',
-};
+export const REPORTING_HIERARCHY: Record<string, string> = Object.fromEntries(
+  ASSOCIATES.map((employee) => [employee.name, employee.manager])
+);
 
 export const INTAKE_ROUTES = ['Request', 'Complaint', 'Feedback', 'Internal Reporting'];
 
@@ -652,40 +641,89 @@ export const MEMBER_SENTIMENT_OPTIONS = [
 ];
 
 export const PRIORITY_SLA: Record<string, { hours: number; color: string; label: string }> = {
-  Critical: { hours: 2, color: 'bg-blue-600', label: 'Critical' },
+  Critical: { hours: 2, color: 'bg-red-600', label: 'Critical' },
   High: { hours: 8, color: 'bg-orange-500', label: 'High' },
-  Medium: { hours: 24, color: 'bg-amber-500', label: 'Medium' },
+  Medium: { hours: 24, color: 'bg-blue-600', label: 'Medium' },
   Low: { hours: 72, color: 'bg-emerald-500', label: 'Low' },
 };
 
 export const STATUSES = ['New', 'In Progress', 'Awaiting Member', 'Resolved', 'Closed'] as const;
 
 export const ASSIGNMENT_RULES: Record<string, string> = {
-  Scheduling: 'Priya Sharma',
-  'Class Experience': 'Sanya Iyer',
-  'Trainer Feedback': 'Sanya Iyer',
-  'Repair and Maintenance': 'Rahul Mehta',
-  'Studio Amenities and Facilities': 'Rahul Mehta',
-  'Operating Systems': 'Arjun Nair',
-  'Tech Issues': 'Arjun Nair',
-  'Pricing and Memberships': 'Neha Kapoor',
-  'Customer Service and Communication': 'Aditya Verma',
-  'Brand Feedback': 'Aditya Verma',
-  'Safety and Security': 'Vikram Singh',
-  'Theft and Lost Items': 'Vikram Singh',
-  Miscellaneous: 'Aditya Verma',
-  'Instructor & Class Quality': 'Sanya Iyer',
-  'Booking & Schedule': 'Priya Sharma',
-  'Facility & Equipment': 'Rahul Mehta',
-  'Billing & Membership': 'Neha Kapoor',
-  'Safety & Medical': 'Vikram Singh',
-  'Front Desk & Service': 'Aditya Verma',
-  'App & Digital': 'Arjun Nair',
-  'Hosted Class & Partnerships': 'Aditya Verma',
-  'Member Progress & Transformation': 'Sanya Iyer',
-  'Sales & Consultation': 'Neha Kapoor',
-  'General Feedback': 'Aditya Verma',
+  Scheduling: 'Akshay Rane',
+  'Class Experience': 'Anisha Shah',
+  'Trainer Feedback': 'Anisha Shah',
+  'Repair and Maintenance': 'Zahur Shaikh',
+  'Studio Amenities and Facilities': 'Zahur Shaikh',
+  'Operating Systems': 'Saachi Shetty - Operations',
+  'Tech Issues': 'Saachi Shetty - Operations',
+  'Pricing and Memberships': 'Pujal Jathar',
+  'Customer Service and Communication': 'Nunu Yeptomi',
+  'Brand Feedback': 'Saachi Shetty',
+  'Safety and Security': 'Saachi Shetty - Operations',
+  'Theft and Lost Items': 'Zahur Shaikh',
+  Miscellaneous: 'Nunu Yeptomi',
+  'Instructor & Class Quality': 'Anisha Shah',
+  'Booking & Schedule': 'Akshay Rane',
+  'Facility & Equipment': 'Zahur Shaikh',
+  'Billing & Membership': 'Pujal Jathar',
+  'Safety & Medical': 'Saachi Shetty - Operations',
+  'Front Desk & Service': 'Nunu Yeptomi',
+  'App & Digital': 'Saachi Shetty - Operations',
+  'Hosted Class & Partnerships': 'Saachi Shetty',
+  'Member Progress & Transformation': 'Anisha Shah',
+  'Sales & Consultation': 'Jimmeey Gondaa',
+  'General Feedback': 'Nunu Yeptomi',
 };
+
+const BENGALURU_SALES_OWNER = 'Yashas K';
+const MUMBAI_SALES_OWNER = 'Akshay Rane';
+const BANDRA_SALES_OWNER = 'Deesha Changwani';
+const BENGALURU_OPERATIONS_OWNER = 'Shifa Ali';
+const MUMBAI_OPERATIONS_OWNER = 'Zahur Shaikh';
+
+function isBengaluruStudio(studio?: string): boolean {
+  return /bengaluru|bangalore|copper/i.test(studio || '');
+}
+
+function isBandraStudio(studio?: string): boolean {
+  return /bandra|supreme/i.test(studio || '');
+}
+
+function isSalesCategory(category: string): boolean {
+  return ['Scheduling', 'Booking & Schedule', 'Front Desk & Service', 'Customer Service and Communication', 'Sales & Consultation'].includes(category);
+}
+
+function isOperationsCategory(category: string): boolean {
+  return ['Facility & Equipment', 'Repair and Maintenance', 'Studio Amenities and Facilities', 'Safety and Security', 'Safety & Medical', 'Theft and Lost Items', 'Operating Systems', 'Tech Issues', 'App & Digital'].includes(category);
+}
+
+export function getEmployee(name: string) {
+  return ASSOCIATES.find((employee) => employee.name === name);
+}
+
+export function resolveTicketAssignee(category: string, studio?: string): string {
+  if (isSalesCategory(category)) {
+    if (isBengaluruStudio(studio)) return BENGALURU_SALES_OWNER;
+    if (isBandraStudio(studio)) return BANDRA_SALES_OWNER;
+    return MUMBAI_SALES_OWNER;
+  }
+  if (isOperationsCategory(category)) {
+    return isBengaluruStudio(studio) ? BENGALURU_OPERATIONS_OWNER : MUMBAI_OPERATIONS_OWNER;
+  }
+  return ASSIGNMENT_RULES[category] || 'Nunu Yeptomi';
+}
+
+export function resolveTicketDepartment(category: string, assignedTo: string): string {
+  const employee = getEmployee(assignedTo);
+  if (employee?.team) return employee.team;
+  if (category.includes('Membership') || category.includes('Pricing') || category.includes('Billing')) return 'Accounts';
+  if (category.includes('Trainer') || category.includes('Class') || category.includes('Instructor')) return 'Training';
+  if (category.includes('Brand') || category.includes('Hosted')) return 'Marketing';
+  if (isOperationsCategory(category)) return 'Operations';
+  if (isSalesCategory(category)) return 'Sales & Client Servicing';
+  return 'Customer Service';
+}
 
 export interface Ticket {
   id: string;
@@ -706,10 +744,12 @@ export interface Ticket {
   team: string;
   tags: string[];
   createdAt: string;
+  createdBy?: string;
   slaDueAt: string;
   sentiment?: 'Positive' | 'Neutral' | 'Negative' | 'Angry';
   attachments?: string[];
   conversationSummary?: string;
+  sourceRef?: string;
 }
 
 export type SlaState = 'Breached' | 'At Risk' | 'On Track' | 'Closed';

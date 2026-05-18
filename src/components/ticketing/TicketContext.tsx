@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
-import { ASSOCIATES, ASSIGNMENT_RULES, getEscalationTarget, isTicketBreached, PRIORITY_SLA, Ticket } from '@/lib/ticketing-data';
+import { ASSOCIATES, getEmployee, getEscalationTarget, isTicketBreached, PRIORITY_SLA, resolveTicketAssignee, resolveTicketDepartment, Ticket } from '@/lib/ticketing-data';
 import { backendSupabase } from '@/lib/backend-supabase';
 import { toast } from '@/components/ui/sonner';
+import { useBackendAuth } from '@/contexts/BackendAuthContext';
+import { ResolvedAssignment, resolveConfiguredAssignment } from '@/lib/routing-settings';
 
 interface TicketContextValue {
   tickets: Ticket[];
@@ -9,6 +11,8 @@ interface TicketContextValue {
   error: string | null;
   updateTicket: (id: string, patch: Partial<Ticket>, actor?: string) => Promise<void>;
   createApprovedTicket: (draft: DraftTicket, conversationId?: string | null, context?: Record<string, unknown>) => Promise<Ticket>;
+  createManualTicket: (draft: ManualTicketInput) => Promise<Ticket>;
+  deleteTicket: (id: string) => Promise<void>;
   selectedTicket: Ticket | null;
   setSelectedTicket: (t: Ticket | null) => void;
   refresh: () => Promise<void>;
@@ -30,6 +34,23 @@ interface DraftTicket {
   tags: string[];
   sentiment?: string;
   conversationSummary?: string;
+}
+
+export interface ManualTicketInput {
+  title: string;
+  description: string;
+  category: string;
+  subCategory: string;
+  priority: Ticket['priority'];
+  studio: string;
+  trainer?: string | null;
+  classType?: string | null;
+  classDateTime?: string | null;
+  memberName?: string | null;
+  memberContact?: string | null;
+  assignedTo?: string | null;
+  tags?: string[];
+  sentiment?: string;
 }
 
 const TicketContext = createContext<TicketContextValue | null>(null);
@@ -82,6 +103,7 @@ interface DbTicketRow {
   conversation_summary?: string | null;
   metadata?: Record<string, unknown> | null;
   created_at: string;
+  created_by?: string | null;
   sla_due_at: string;
 }
 
@@ -110,6 +132,23 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 function throwSupabaseError(error: unknown, fallback: string): never {
   throw new Error(getErrorMessage(error, fallback));
+}
+
+function getMissingColumnName(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null;
+  const value = error as Record<string, unknown>;
+  if (value.code !== '42703') return null;
+  const message = typeof value.message === 'string' ? value.message : '';
+  const details = typeof value.details === 'string' ? value.details : '';
+  const match = `${message} ${details}`.match(/column "([^"]+)"/i);
+  return match?.[1] || null;
+}
+
+function removeUnsupportedTicketColumn(row: DbTicketPatch, column: string): DbTicketPatch {
+  if (!(column in row)) return row;
+  const next = { ...row };
+  delete next[column];
+  return next;
 }
 
 function normalizeHistoricStatus(status: string): Ticket['status'] {
@@ -155,10 +194,21 @@ function buildHistoricTags(row: HistoricTicketRow): string[] {
   return Array.from(new Set(tags));
 }
 
+function normalizeTicketOwner(category: string, studio?: string | null, assignedTo?: string | null): string {
+  if (assignedTo && getEmployee(assignedTo)) return assignedTo;
+  return resolveTicketAssignee(category, studio || undefined);
+}
+
+function normalizeTicketTeam(category: string, assignedTo: string): string {
+  return resolveTicketDepartment(category, assignedTo);
+}
+
 function mapHistoricTicket(row: HistoricTicketRow): Ticket {
   const createdAt = toIsoDate(row.date_opened);
   const slaDueAt = toIsoDate(row.last_response_date || row.date_opened);
   const title = row.issue_summary.length > 140 ? `${row.issue_summary.slice(0, 137)}...` : row.issue_summary;
+  const assignedTo = normalizeTicketOwner(row.complaint_category, 'Historic Import', row.ownership);
+  const team = normalizeTicketTeam(row.complaint_category, assignedTo);
   const conversationSummary = [
     row.key_customer_statements?.length ? `Key statements: ${row.key_customer_statements.join(' | ')}` : '',
     row.internal_risk_flags?.length ? `Risk flags: ${row.internal_risk_flags.join(' | ')}` : '',
@@ -179,8 +229,8 @@ function mapHistoricTicket(row: HistoricTicketRow): Ticket {
     memberName: row.customer_name || undefined,
     memberContact: row.customer_email || undefined,
     reportedBy: row.email_type || undefined,
-    assignedTo: row.ownership || 'Unassigned',
-    team: row.intelligence_bucket || 'Historic Intelligence',
+    assignedTo,
+    team,
     tags: buildHistoricTags(row),
     createdAt,
     slaDueAt,
@@ -191,6 +241,9 @@ function mapHistoricTicket(row: HistoricTicketRow): Ticket {
 
 // DB row → UI Ticket
 function fromRow(row: DbTicketRow): Ticket {
+  const assignedTo = normalizeTicketOwner(row.category, row.studio, row.assigned_to);
+  const team = normalizeTicketTeam(row.category, assignedTo);
+
   return {
     id: row.id,
     title: row.title,
@@ -206,19 +259,73 @@ function fromRow(row: DbTicketRow): Ticket {
     memberName: row.member_name || undefined,
     memberContact: row.member_contact || undefined,
     reportedBy: row.reported_by || undefined,
-    assignedTo: row.assigned_to,
-    team: row.team,
+    assignedTo,
+    team,
     tags: row.tags || [],
     sentiment: row.sentiment || undefined,
     conversationSummary: row.conversation_summary || undefined,
     createdAt: row.created_at,
+    createdBy: row.created_by || undefined,
     slaDueAt: row.sla_due_at,
+    sourceRef: row.source_ref || (typeof row.metadata?.source_ref === 'string' ? row.metadata.source_ref : undefined),
   };
+}
+
+function ticketDedupeKey(ticket: Ticket): string {
+  if (ticket.sourceRef) return `source:${ticket.sourceRef}`;
+  const title = ticket.title.trim().toLowerCase();
+  const member = (ticket.memberContact || ticket.memberName || '').trim().toLowerCase();
+  const createdDay = Number.isNaN(new Date(ticket.createdAt).getTime())
+    ? ''
+    : new Date(ticket.createdAt).toISOString().slice(0, 10);
+  return `fingerprint:${title}|${ticket.category}|${ticket.subCategory}|${member}|${createdDay}`;
+}
+
+function dedupeAndSortTickets(tickets: Ticket[]): Ticket[] {
+  const byKey = new Map<string, Ticket>();
+  for (const ticket of tickets) {
+    const key = ticketDedupeKey(ticket);
+    const current = byKey.get(key);
+    if (!current || new Date(ticket.createdAt).getTime() > new Date(current.createdAt).getTime()) {
+      byKey.set(key, ticket);
+    }
+  }
+  return Array.from(byKey.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
 }
 
 function normalizeCreatedTicket(created: DbTicketRow | Ticket): Ticket {
   if ('sub_category' in created) return fromRow(created);
   return created;
+}
+
+function getReporterNameFromAuthUser(user?: { email?: string; user_metadata?: Record<string, unknown> } | null): string {
+  const metadata = user?.user_metadata || {};
+  const fullName = typeof metadata.full_name === 'string' ? metadata.full_name.trim() : '';
+  const name = typeof metadata.name === 'string' ? metadata.name.trim() : '';
+  return fullName || name || user?.email || 'Authenticated user';
+}
+
+function cleanInlineMarkdown(value: string): string {
+  return value.replace(/\*\*(.*?)\*\*/g, '$1').trim();
+}
+
+function formatTicketBody(value: string): string {
+  const lines = value
+    .split('\n')
+    .map((line) => cleanInlineMarkdown(line))
+    .filter((line) => line && !/^(\*{3,}|-{3,})$/.test(line));
+
+  if (lines.some((line) => /^[-*]\s+/.test(line)) || lines.length <= 1) {
+    return lines.join('\n');
+  }
+
+  return lines.map((line) => {
+    if (/^[A-Z][A-Za-z0-9/&().,'’ -]{2,48}:/.test(line)) return `- ${line}`;
+    if (/^(member|client|community member|guest|prospect|host|trainer)\b/i.test(line)) return `- ${line}`;
+    return line;
+  }).join('\n');
 }
 
 function extractCreatedTicket(data: unknown, depth = 0): DbTicketRow | Ticket | null {
@@ -307,7 +414,8 @@ function toRowPatch(patch: Partial<Ticket>): DbTicketPatch {
   };
   const out: DbTicketPatch = {};
   for (const [k, v] of Object.entries(patch)) {
-    if (map[k]) out[map[k]] = v;
+    if (!map[k]) continue;
+    out[map[k]] = k === 'description' && typeof v === 'string' ? formatTicketBody(v) : v;
   }
   return out;
 }
@@ -320,14 +428,7 @@ function computeSlaDueAt(priority: Ticket['priority']): string {
 }
 
 function resolveTeam(assignedTo: string, category: string): string {
-  const associate = ASSOCIATES.find((item) => item.name === assignedTo);
-  if (associate?.team) return associate.team;
-  if (category.includes('Membership') || category.includes('Pricing') || category.includes('Sales')) return 'Revenue Operations';
-  if (category.includes('Trainer') || category.includes('Class')) return 'Instructor Experience';
-  if (category.includes('Tech') || category.includes('Operating')) return 'Digital Support';
-  if (category.includes('Safety') || category.includes('Theft')) return 'Safety & Compliance';
-  if (category.includes('Repair') || category.includes('Amenities') || category.includes('Facilities')) return 'Operations';
-  return 'Member Experience';
+  return resolveTicketDepartment(category, assignedTo);
 }
 
 function buildSourceRef(draft: DraftTicket, context: Record<string, unknown> = {}, conversationId?: string | null): string {
@@ -352,11 +453,28 @@ function buildSourceRef(draft: DraftTicket, context: Record<string, unknown> = {
   return `approved-draft:${Math.abs(hash).toString(36)}`;
 }
 
-function toInsertRow(draft: DraftTicket, context: Record<string, unknown> = {}): DbTicketPatch {
-  const assignedTo = ASSIGNMENT_RULES[draft.category] || 'Aditya Verma';
+function toInsertRow(draft: DraftTicket, context: Record<string, unknown> = {}, assignment?: ResolvedAssignment): DbTicketPatch {
+  const assignedTo = assignment?.assignedTo || resolveTicketAssignee(draft.category, draft.studio);
+  const team = assignment?.team || resolveTeam(assignedTo, draft.category);
+  const nextEscalation = assignment?.nextEscalation || getEscalationTarget(assignedTo);
+  const priority = assignment?.priority || draft.priority;
+  const slaDueAt = assignment?.slaHours
+    ? new Date(Date.now() + assignment.slaHours * 60 * 60 * 1000).toISOString()
+    : computeSlaDueAt(priority);
+  const formattedDescription = formatTicketBody(draft.description);
   const metadata = {
     source_ref: buildSourceRef(draft, context),
     intake_context: context,
+      routing: {
+        department: team,
+        assigned_to: assignedTo,
+        owner_pool: assignment?.ownerPool || [assignedTo],
+        next_escalation: nextEscalation,
+      priority,
+      sla_due_at: slaDueAt,
+      status: 'New',
+      routing_source: assignment?.source || 'athena_employee_directory',
+    },
     dynamic_fields: Object.fromEntries(
       Object.entries(context).filter(([key, value]) =>
         value != null &&
@@ -380,11 +498,12 @@ function toInsertRow(draft: DraftTicket, context: Record<string, unknown> = {}):
   };
 
   return {
+    source_ref: metadata.source_ref,
     title: draft.title,
-    description: draft.description,
+    description: formattedDescription,
     category: draft.category,
     sub_category: draft.subCategory,
-    priority: draft.priority,
+    priority,
     status: 'New',
     studio: draft.studio || 'Unspecified Studio',
     trainer: draft.trainer || null,
@@ -394,30 +513,75 @@ function toInsertRow(draft: DraftTicket, context: Record<string, unknown> = {}):
     member_contact: draft.memberContact || null,
     reported_by: draft.reportedBy || null,
     assigned_to: assignedTo,
-    team: resolveTeam(assignedTo, draft.category),
-    tags: Array.from(new Set([...(draft.tags || []), 'ai-approved'])),
+    team,
+    tags: Array.from(new Set([...(draft.tags || []), 'ai-approved', assignment?.source || 'default-routing'])),
     sentiment: draft.sentiment || null,
-    conversation_summary: draft.conversationSummary || draft.description,
-    sla_due_at: computeSlaDueAt(draft.priority),
+    conversation_summary: draft.conversationSummary || formattedDescription,
+    sla_due_at: slaDueAt,
     metadata,
   };
 }
 
+function manualInputToDraft(input: ManualTicketInput, reporterName: string): DraftTicket {
+  return {
+    title: input.title.trim(),
+    description: input.description.trim(),
+    category: input.category,
+    subCategory: input.subCategory,
+    priority: input.priority,
+    studio: input.studio || 'Unspecified Studio',
+    trainer: input.trainer || null,
+    classType: input.classType || null,
+    classDateTime: input.classDateTime || null,
+    memberName: input.memberName || null,
+    memberContact: input.memberContact || null,
+    reportedBy: reporterName,
+    tags: Array.from(new Set(['manual-entry', ...(input.tags || [])])),
+    sentiment: input.sentiment,
+    conversationSummary: input.description.trim(),
+  };
+}
+
 export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, profile, accessRole } = useBackendAuth();
   const [liveTickets, setLiveTickets] = useState<Ticket[]>([]);
   const [historicTickets, setHistoricTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedTicket, setSelectedTicketState] = useState<Ticket | null>(null);
 
+  const visibleIdentityValues = useMemo(() => {
+    const values = [
+      user?.id,
+      user?.email,
+      profile?.email,
+      profile?.full_name,
+      typeof user?.user_metadata?.full_name === 'string' ? user.user_metadata.full_name : null,
+      typeof user?.user_metadata?.name === 'string' ? user.user_metadata.name : null,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).trim().toLowerCase());
+    return new Set(values);
+  }, [profile?.email, profile?.full_name, user]);
+
+  const canSeeTicket = useCallback((ticket: Ticket) => {
+    if (accessRole === 'admin') return true;
+    const candidates = [
+      ticket.createdBy,
+      ticket.assignedTo,
+      ticket.reportedBy,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).trim().toLowerCase());
+    return candidates.some((value) => visibleIdentityValues.has(value));
+  }, [accessRole, visibleIdentityValues]);
+
   const tickets = useMemo(() => {
     const byId = new Map<string, Ticket>();
     for (const ticket of historicTickets) byId.set(ticket.id, ticket);
     for (const ticket of liveTickets) byId.set(ticket.id, ticket);
-    return Array.from(byId.values()).sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-  }, [historicTickets, liveTickets]);
+    return dedupeAndSortTickets(Array.from(byId.values()).filter(canSeeTicket));
+  }, [canSeeTicket, historicTickets, liveTickets]);
 
   const fetchHistoricTickets = useCallback(async () => {
     const response = await fetch('/tickets.json', { cache: 'no-store' });
@@ -426,7 +590,7 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     const rows = await response.json() as HistoricTicketRow[];
     setHistoricTickets(rows.map(mapHistoricTicket));
-  }, []);
+  }, [canSeeTicket]);
 
   const fetchTickets = useCallback(async () => {
     const { data, error } = await backendSupabase
@@ -476,12 +640,18 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         (payload) => {
           if (payload.eventType === 'INSERT') {
             const t = fromRow(payload.new as DbTicketRow);
+            if (!canSeeTicket(t)) return;
             setLiveTickets((prev) => {
               if (prev.some((x) => x.id === t.id)) return prev;
               return [t, ...prev];
             });
           } else if (payload.eventType === 'UPDATE') {
             const t = fromRow(payload.new as DbTicketRow);
+            if (!canSeeTicket(t)) {
+              setLiveTickets((prev) => prev.filter((x) => x.id !== t.id));
+              setSelectedTicketState((prev) => (prev?.id === t.id ? null : prev));
+              return;
+            }
             setLiveTickets((prev) => prev.map((x) => (x.id === t.id ? t : x)));
             setSelectedTicketState((prev) => (prev && prev.id === t.id ? t : prev));
           } else if (payload.eventType === 'DELETE') {
@@ -493,10 +663,10 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       )
       .subscribe();
     return () => { backendSupabase.removeChannel(channel); };
-  }, []);
+  }, [canSeeTicket]);
 
   const updateTicket = useCallback(
-    async (id: string, patch: Partial<Ticket>, actor = 'Aditya Verma') => {
+    async (id: string, patch: Partial<Ticket>, actor = 'Athena') => {
       const rowPatch = toRowPatch(patch);
 
       // Get current ticket to compute event diff
@@ -549,12 +719,104 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [tickets, refresh]
   );
 
+  const createManualTicket = useCallback(
+    async (input: ManualTicketInput) => {
+      const { data: authData } = await backendSupabase.auth.getSession();
+      const reporterName = getReporterNameFromAuthUser(authData.session?.user);
+      const draft = manualInputToDraft(input, reporterName);
+      const configuredAssignment = await resolveConfiguredAssignment(input.category, input.subCategory, input.studio);
+      const assignedTo = input.assignedTo || configuredAssignment.assignedTo;
+      const assignment = input.assignedTo
+        ? {
+            ...configuredAssignment,
+            assignedTo,
+            team: resolveTeam(assignedTo, input.category),
+            nextEscalation: getEscalationTarget(assignedTo),
+          }
+        : configuredAssignment;
+      const row = {
+        ...toInsertRow(draft, { source: 'manual_ticket' }, assignment),
+        assigned_to: assignedTo,
+        team: resolveTeam(assignedTo, input.category),
+        created_by: authData.session?.user.id,
+      };
+      row.metadata = {
+        ...((row.metadata as Record<string, unknown>) || {}),
+        routing: {
+          ...(((row.metadata as Record<string, unknown>)?.routing as Record<string, unknown>) || {}),
+          assigned_to: assignedTo,
+          department: resolveTeam(assignedTo, input.category),
+          next_escalation: getEscalationTarget(assignedTo),
+        },
+      };
+
+      let rowForInsert = row;
+      let created: DbTicketRow | null = null;
+      let createError: unknown = null;
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const { data, error } = await backendSupabase
+          .from('tickets')
+          .insert(rowForInsert)
+          .select('*')
+          .single();
+
+        if (!error) {
+          created = data as DbTicketRow;
+          createError = null;
+          break;
+        }
+
+        createError = error;
+        const missingColumn = getMissingColumnName(error);
+        if (!missingColumn || !(missingColumn in rowForInsert)) break;
+        rowForInsert = removeUnsupportedTicketColumn(rowForInsert, missingColumn);
+      }
+
+      if (createError || !created) throwSupabaseError(createError, 'Manual ticket creation failed');
+
+      const ticket = normalizeCreatedTicket(created);
+      setLiveTickets((prev) => dedupeAndSortTickets([ticket, ...prev]));
+      setSelectedTicketState(ticket);
+      await refresh();
+      return ticket;
+    },
+    [refresh]
+  );
+
+  const deleteTicket = useCallback(
+    async (id: string) => {
+      const current = tickets.find((ticket) => ticket.id === id);
+      setLiveTickets((prev) => prev.filter((ticket) => ticket.id !== id));
+      setSelectedTicketState((prev) => (prev?.id === id ? null : prev));
+
+      const { error } = await backendSupabase.from('tickets').delete().eq('id', id);
+      if (error) {
+        if (current?.tags.includes('historic')) {
+          setHistoricTickets((prev) => prev.filter((ticket) => ticket.id !== id));
+          return;
+        }
+        await refresh();
+        throwSupabaseError(error, 'Ticket deletion failed');
+      }
+      await refresh();
+    },
+    [tickets, refresh]
+  );
+
   const createApprovedTicket = useCallback(
     async (draft: DraftTicket, conversationId?: string | null, context?: Record<string, unknown>) => {
       const { data: authData } = await backendSupabase.auth.getSession();
+      const signedInReporter = getReporterNameFromAuthUser(authData.session?.user);
+      const publishDraft = {
+        ...draft,
+        reportedBy: signedInReporter,
+      };
+      const publishContext = { ...(context || {}), reportedBy: signedInReporter };
       const sourceRef = buildSourceRef(draft, context || {}, conversationId);
+      const configuredAssignment = await resolveConfiguredAssignment(publishDraft.category, publishDraft.subCategory, publishDraft.studio);
       const insertRow = {
-        ...toInsertRow(draft, { ...(context || {}), conversationId }),
+        ...toInsertRow(publishDraft, { ...publishContext, conversationId }, configuredAssignment),
         created_by: authData.session?.user.id,
       };
 
@@ -582,25 +844,43 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       if (existing) return normalizeCreatedTicket(existing as DbTicketRow);
 
-      const { data: created, error } = await backendSupabase
-        .from('tickets')
-        .insert(insertRow)
-        .select('*')
-        .single();
+      let rowForInsert = insertRow;
+      let created: DbTicketRow | null = null;
+      let createError: unknown = null;
 
-      if (error) {
-        if (error.code === '23505') {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const { data, error } = await backendSupabase
+          .from('tickets')
+          .insert(rowForInsert)
+          .select('*')
+          .single();
+
+        if (!error) {
+          created = data as DbTicketRow;
+          createError = null;
+          break;
+        }
+
+        createError = error;
+        const missingColumn = getMissingColumnName(error);
+        if (!missingColumn || !(missingColumn in rowForInsert)) break;
+        rowForInsert = removeUnsupportedTicketColumn(rowForInsert, missingColumn);
+      }
+
+      if (createError || !created) {
+        const error = createError as { code?: string } | null;
+        if (error?.code === '23505') {
           const { data: duplicated, error: duplicateFetchError } = await findExistingTicket();
           if (duplicated) return normalizeCreatedTicket(duplicated as DbTicketRow);
           if (duplicateFetchError) throwSupabaseError(duplicateFetchError, 'Could not fetch the existing approved ticket');
         }
-        throwSupabaseError(error, 'Ticket creation failed');
+        throwSupabaseError(createError, 'Ticket creation failed');
       }
 
       const { error: eventError } = await backendSupabase.from('ticket_events').insert({
-        ticket_id: (created as DbTicketRow).id,
+        ticket_id: created.id,
         event_type: 'ticket_created',
-        actor: draft.reportedBy || authData.session?.user.email || 'Athena',
+        actor: signedInReporter,
         to_value: 'New',
         metadata: {
           conversationId,
@@ -658,6 +938,8 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         error,
         updateTicket,
         createApprovedTicket,
+        createManualTicket,
+        deleteTicket,
         selectedTicket,
         setSelectedTicket: setSelectedTicketState,
         refresh,

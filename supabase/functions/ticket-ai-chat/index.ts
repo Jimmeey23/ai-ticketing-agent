@@ -58,6 +58,8 @@ Behavior rules:
 - Do not ask multiple prose questions. Return a structured detailForm with full field definitions when multiple details are missing; ask only one concise question when exactly one detail is missing.
 - Use date fields for dates and datetime-local fields for date/time fields.
 - Use only approved master-data options for studios, instructors, class types, categories, subcategories, priorities, associates, and route buttons.
+- Use provided routingRules, employees, departments, and locations as authoritative when present. Do not invent owner names, departments, escalation paths, SLAs, or locations.
+- Ticket titles must use the most specific issue and known member/session/studio context, not generic labels. Include selected member or session names when known.
 - Member and class/session details are selected through Momence-powered UI fields, not ordinary text boxes when a structured form is shown.
 - For freeze, rollover, membership, and package-specific requests, require a selected member first and then use only that member's active memberships.
 - Write ticket content in third-person internal documentation language, focused on what the community member stated.
@@ -132,31 +134,55 @@ const PRIORITY_SLA_HOURS: Record<Priority, number> = {
 const PLACEHOLDER_VALUE_PATTERN = /unspecified|not specified|member-reported issue|ai intake|authenticated user/i;
 
 const ASSIGNMENT_RULES: Record<string, { assignedTo: string; team: string }> = {
-  Scheduling: { assignedTo: 'Priya Sharma', team: 'Client Success' },
-  'Class Experience': { assignedTo: 'Sanya Iyer', team: 'Instructor Experience' },
-  'Trainer Feedback': { assignedTo: 'Sanya Iyer', team: 'Instructor Experience' },
-  'Repair and Maintenance': { assignedTo: 'Rahul Mehta', team: 'Operations' },
-  'Studio Amenities and Facilities': { assignedTo: 'Rahul Mehta', team: 'Operations' },
-  'Operating Systems': { assignedTo: 'Arjun Nair', team: 'Digital Support' },
-  'Tech Issues': { assignedTo: 'Arjun Nair', team: 'Digital Support' },
-  'Pricing and Memberships': { assignedTo: 'Neha Kapoor', team: 'Revenue Operations' },
-  'Customer Service and Communication': { assignedTo: 'Aditya Verma', team: 'Member Experience' },
-  'Brand Feedback': { assignedTo: 'Aditya Verma', team: 'Brand' },
-  'Safety and Security': { assignedTo: 'Vikram Singh', team: 'Safety & Compliance' },
-  'Theft and Lost Items': { assignedTo: 'Vikram Singh', team: 'Safety & Compliance' },
-  Miscellaneous: { assignedTo: 'Aditya Verma', team: 'Member Experience' },
-  'Instructor & Class Quality': { assignedTo: 'Sanya Iyer', team: 'Instructor Experience' },
-  'Booking & Schedule': { assignedTo: 'Priya Sharma', team: 'Client Success' },
-  'Facility & Equipment': { assignedTo: 'Rahul Mehta', team: 'Operations' },
-  'Billing & Membership': { assignedTo: 'Neha Kapoor', team: 'Revenue Operations' },
-  'Safety & Medical': { assignedTo: 'Vikram Singh', team: 'Safety & Compliance' },
-  'Front Desk & Service': { assignedTo: 'Aditya Verma', team: 'Member Experience' },
-  'App & Digital': { assignedTo: 'Arjun Nair', team: 'Digital Support' },
-  'Hosted Class & Partnerships': { assignedTo: 'Aditya Verma', team: 'Partnerships' },
-  'Member Progress & Transformation': { assignedTo: 'Sanya Iyer', team: 'Instructor Experience' },
-  'Sales & Consultation': { assignedTo: 'Neha Kapoor', team: 'Revenue Operations' },
-  'General Feedback': { assignedTo: 'Aditya Verma', team: 'Member Experience' },
+  Scheduling: { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' },
+  'Class Experience': { assignedTo: 'Anisha Shah', team: 'Training' },
+  'Trainer Feedback': { assignedTo: 'Anisha Shah', team: 'Training' },
+  'Repair and Maintenance': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
+  'Studio Amenities and Facilities': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
+  'Operating Systems': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
+  'Tech Issues': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
+  'Pricing and Memberships': { assignedTo: 'Pujal Jathar', team: 'Accounts' },
+  'Customer Service and Communication': { assignedTo: 'Nunu Yeptomi', team: 'Customer Service' },
+  'Brand Feedback': { assignedTo: 'Saachi Shetty', team: 'Marketing' },
+  'Safety and Security': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
+  'Theft and Lost Items': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
+  Miscellaneous: { assignedTo: 'Nunu Yeptomi', team: 'Customer Service' },
+  'Instructor & Class Quality': { assignedTo: 'Anisha Shah', team: 'Training' },
+  'Booking & Schedule': { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' },
+  'Facility & Equipment': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
+  'Billing & Membership': { assignedTo: 'Pujal Jathar', team: 'Accounts' },
+  'Safety & Medical': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
+  'Front Desk & Service': { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' },
+  'App & Digital': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
+  'Hosted Class & Partnerships': { assignedTo: 'Saachi Shetty', team: 'Marketing' },
+  'Member Progress & Transformation': { assignedTo: 'Anisha Shah', team: 'Training' },
+  'Sales & Consultation': { assignedTo: 'Jimmeey Gondaa', team: 'Sales & Client Servicing' },
+  'General Feedback': { assignedTo: 'Nunu Yeptomi', team: 'Customer Service' },
 };
+
+function isBengaluruStudio(studio?: string | null): boolean {
+  return /bengaluru|bangalore|copper/i.test(studio || '');
+}
+
+function isBandraStudio(studio?: string | null): boolean {
+  return /bandra|supreme/i.test(studio || '');
+}
+
+function resolveAssignment(category: string, studio?: string | null): { assignedTo: string; team: string } {
+  if (['Scheduling', 'Booking & Schedule', 'Front Desk & Service', 'Customer Service and Communication', 'Sales & Consultation'].includes(category)) {
+    if (isBengaluruStudio(studio)) return { assignedTo: 'Yashas K', team: 'Sales & Client Servicing' };
+    if (isBandraStudio(studio)) return { assignedTo: 'Deesha Changwani', team: 'Sales & Client Servicing' };
+    return { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' };
+  }
+
+  if (['Facility & Equipment', 'Repair and Maintenance', 'Studio Amenities and Facilities', 'Safety and Security', 'Safety & Medical', 'Theft and Lost Items', 'Operating Systems', 'Tech Issues', 'App & Digital'].includes(category)) {
+    return isBengaluruStudio(studio)
+      ? { assignedTo: 'Shifa Ali', team: 'Management' }
+      : { assignedTo: 'Zahur Shaikh', team: 'Operations' };
+  }
+
+  return ASSIGNMENT_RULES[category] || ASSIGNMENT_RULES['General Feedback'];
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -577,9 +603,10 @@ function buildSourceRef(draft: DraftTicket, context: Record<string, unknown> = {
 
 function toTicketRow(draft: DraftTicket, context: Record<string, unknown> = {}, conversationId?: string | null) {
   const priority = normalizePriority(draft.priority);
-  const assignment = ASSIGNMENT_RULES[draft.category] || ASSIGNMENT_RULES['General Feedback'];
+  const assignment = resolveAssignment(draft.category, draft.studio);
 
   return {
+    source_ref: buildSourceRef(draft, context, conversationId),
     title: cleanString(draft.title, 'Member support ticket'),
     description: cleanString(draft.description, 'No description provided.'),
     category: cleanString(draft.category, 'General Feedback'),
@@ -602,9 +629,33 @@ function toTicketRow(draft: DraftTicket, context: Record<string, unknown> = {}, 
       ...(draft.metadata || {}),
       source_ref: buildSourceRef(draft, context, conversationId),
       intake_context: context,
+      routing: {
+        department: assignment.team,
+        assigned_to: assignment.assignedTo,
+        status: 'New',
+        priority,
+        routing_source: 'athena_employee_directory',
+      },
     },
     sla_due_at: computeSlaDueAt(priority),
   };
+}
+
+function getMissingColumnName(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null;
+  const value = error as Record<string, unknown>;
+  if (value.code !== '42703') return null;
+  const message = typeof value.message === 'string' ? value.message : '';
+  const details = typeof value.details === 'string' ? value.details : '';
+  const match = `${message} ${details}`.match(/column "([^"]+)"/i);
+  return match?.[1] || null;
+}
+
+function removeUnsupportedTicketColumn(row: Record<string, unknown>, column: string) {
+  if (!(column in row)) return row;
+  const next = { ...row };
+  delete next[column];
+  return next;
 }
 
 Deno.serve(async (request) => {
@@ -652,14 +703,31 @@ Deno.serve(async (request) => {
         });
       }
 
-      const { data, error } = await supabase
-        .from('tickets')
-        .insert(toTicketRow(draft, body.context || {}, body.conversationId))
-        .select('*')
-        .single();
+      let rowForInsert = toTicketRow(draft, body.context || {}, body.conversationId);
+      let data: Record<string, unknown> | null = null;
+      let createError: { code?: string; message?: string } | null = null;
 
-      if (error) {
-        if (error.code === '23505') {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await supabase
+          .from('tickets')
+          .insert(rowForInsert)
+          .select('*')
+          .single();
+
+        if (!result.error) {
+          data = result.data;
+          createError = null;
+          break;
+        }
+
+        createError = result.error;
+        const missingColumn = getMissingColumnName(result.error);
+        if (!missingColumn || !(missingColumn in rowForInsert)) break;
+        rowForInsert = removeUnsupportedTicketColumn(rowForInsert, missingColumn);
+      }
+
+      if (createError || !data) {
+        if (createError?.code === '23505') {
           const { data: duplicated } = await findExistingTicket();
           if (duplicated) {
             return json({
@@ -668,7 +736,7 @@ Deno.serve(async (request) => {
             });
           }
         }
-        return json({ error: error.message }, 500);
+        return json({ error: createError?.message || 'Ticket creation failed' }, 500);
       }
       return json({
         reply: `Ticket ${data.id} has been created from the approved draft.`,
