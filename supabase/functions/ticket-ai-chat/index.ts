@@ -357,7 +357,7 @@ function normalizeAiIntakeResponse(value: Record<string, unknown> | null): AiInt
       ? value.inferredContext as Record<string, string>
       : {},
     missingFields: Array.isArray(value.missingFields) ? value.missingFields.map(String) : [],
-    publishable: typeof value.publishable === 'boolean' ? value.publishable : !Boolean(value.needsMoreInfo || detailForm),
+    publishable: typeof value.publishable === 'boolean' ? value.publishable : !(value.needsMoreInfo || detailForm),
     urgencyReason: cleanString(value.urgencyReason),
   };
 }

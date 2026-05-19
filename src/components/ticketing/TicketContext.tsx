@@ -1,8 +1,17 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
-import { ASSOCIATES, getEmployee, getEscalationTarget, isTicketBreached, PRIORITY_SLA, resolveTicketAssignee, resolveTicketDepartment, Ticket } from '@/lib/ticketing-data';
+import { ASSOCIATES, getEmployee, getEscalationTarget, isTicketBreached, PRIORITY_SLA, resolveTicketAssignee, resolveTicketDepartment, Ticket, TicketMetadata, TicketResolutionDetail } from '@/lib/ticketing-data';
 import { backendSupabase } from '@/lib/backend-supabase';
 import { useBackendAuth } from '@/contexts/BackendAuthContext';
 import { ResolvedAssignment, resolveConfiguredAssignment } from '@/lib/routing-settings';
+import { canUpdateTicketStatus as canUpdateTicketStatusForIdentity } from '@/lib/ticket-permissions';
+import {
+  dismissedNotificationIdsFromRows,
+  loadDismissedNotificationIds,
+  mergeDismissedNotificationIds,
+  notificationDismissalRows,
+  notificationDismissalStorageKey as buildNotificationDismissalStorageKey,
+  saveDismissedNotificationIds,
+} from '@/lib/notification-dismissals';
 
 export interface TicketNotification {
   id: string;
@@ -21,12 +30,25 @@ interface TicketContextValue {
   loading: boolean;
   error: string | null;
   updateTicket: (id: string, patch: Partial<Ticket>, actor?: string) => Promise<void>;
+  updateTicketStatus: (id: string, detail: TicketStatusUpdateInput, actor?: string) => Promise<void>;
+  canUpdateTicketStatus: (ticket: Ticket) => boolean;
+  clearAllNotifications: () => void;
   createApprovedTicket: (draft: DraftTicket, conversationId?: string | null, context?: Record<string, unknown>) => Promise<Ticket>;
   createManualTicket: (draft: ManualTicketInput) => Promise<Ticket>;
   deleteTicket: (id: string) => Promise<void>;
   selectedTicket: Ticket | null;
   setSelectedTicket: (t: Ticket | null) => void;
   refresh: () => Promise<void>;
+}
+
+export interface TicketStatusUpdateInput {
+  status: Ticket['status'];
+  reason: string;
+  actionTaken: string;
+  actionDate: string;
+  followUpDate?: string;
+  comments?: string;
+  notes?: string;
 }
 
 interface DraftTicket {
@@ -279,6 +301,7 @@ function fromRow(row: DbTicketRow): Ticket {
     createdBy: row.created_by || undefined,
     slaDueAt: row.sla_due_at,
     sourceRef: row.source_ref || (typeof row.metadata?.source_ref === 'string' ? row.metadata.source_ref : undefined),
+    metadata: (row.metadata || undefined) as TicketMetadata | undefined,
   };
 }
 
@@ -422,6 +445,7 @@ function toRowPatch(patch: Partial<Ticket>): DbTicketPatch {
     sentiment: 'sentiment',
     conversationSummary: 'conversation_summary',
     slaDueAt: 'sla_due_at',
+    metadata: 'metadata',
   };
   const out: DbTicketPatch = {};
   for (const [k, v] of Object.entries(patch)) {
@@ -553,6 +577,41 @@ function manualInputToDraft(input: ManualTicketInput, reporterName: string): Dra
   };
 }
 
+function cleanResolutionText(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function buildResolutionDetail(
+  current: Ticket,
+  input: TicketStatusUpdateInput,
+  actor: string
+): TicketResolutionDetail {
+  return {
+    status: input.status,
+    previousStatus: current.status,
+    reason: input.reason.trim(),
+    actionTaken: input.actionTaken.trim(),
+    actionDate: input.actionDate || new Date().toISOString().slice(0, 10),
+    followUpDate: cleanResolutionText(input.followUpDate),
+    comments: cleanResolutionText(input.comments),
+    notes: cleanResolutionText(input.notes),
+    actor,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function mergeResolutionMetadata(metadata: TicketMetadata | undefined, detail: TicketResolutionDetail): TicketMetadata {
+  const history = Array.isArray(metadata?.resolutionHistory)
+    ? metadata.resolutionHistory.filter(Boolean)
+    : [];
+  return {
+    ...(metadata || {}),
+    latestResolution: detail,
+    resolutionHistory: [detail, ...history].slice(0, 25),
+  };
+}
+
 export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, profile, accessRole } = useBackendAuth();
   const [liveTickets, setLiveTickets] = useState<Ticket[]>([]);
@@ -560,6 +619,15 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedTicket, setSelectedTicketState] = useState<Ticket | null>(null);
+  const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(() => new Set());
+  const notificationDismissalStorage = useMemo(() => (
+    typeof window === 'undefined' ? undefined : window.localStorage
+  ), []);
+  const notificationDismissalStorageKey = useMemo(() => buildNotificationDismissalStorageKey([
+    user?.id,
+    user?.email,
+    profile?.email,
+  ]), [profile?.email, user?.email, user?.id]);
 
   const visibleIdentityValues = useMemo(() => {
     const values = [
@@ -599,6 +667,52 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return candidates.some((value) => visibleIdentityValues.has(value));
   }, [visibleIdentityValues]);
 
+  const canUpdateTicketStatus = useCallback((ticket: Ticket) => (
+    canUpdateTicketStatusForIdentity({
+      accessRole,
+      identityValues: visibleIdentityValues,
+      ticket,
+    })
+  ), [accessRole, visibleIdentityValues]);
+
+  useEffect(() => {
+    let mounted = true;
+    const localIds = loadDismissedNotificationIds(
+      notificationDismissalStorage,
+      notificationDismissalStorageKey
+    );
+    setReadNotificationIds(localIds);
+
+    if (!user?.id) {
+      return () => {
+        mounted = false;
+      };
+    }
+
+    backendSupabase
+      .from('notification_dismissals')
+      .select('notification_id')
+      .eq('user_id', user.id)
+      .then(({ data, error: dismissalError }) => {
+        if (!mounted) return;
+        if (dismissalError) {
+          console.warn('Notification dismissal load failed:', getErrorMessage(dismissalError, 'Unknown notification dismissal error'));
+          return;
+        }
+
+        const remoteIds = dismissedNotificationIdsFromRows((data || []) as Array<{ notification_id?: string | null }>);
+        setReadNotificationIds((current) => {
+          const merged = mergeDismissedNotificationIds(current, localIds, remoteIds);
+          saveDismissedNotificationIds(notificationDismissalStorage, notificationDismissalStorageKey, merged);
+          return merged;
+        });
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [notificationDismissalStorage, notificationDismissalStorageKey, user?.id]);
+
   const tickets = useMemo(() => {
     const byId = new Map<string, Ticket>();
     for (const ticket of historicTickets) byId.set(ticket.id, ticket);
@@ -606,7 +720,7 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return dedupeAndSortTickets(Array.from(byId.values()).filter(canSeeTicket));
   }, [canSeeTicket, historicTickets, liveTickets]);
 
-  const notifications = useMemo<TicketNotification[]>(() => {
+  const generatedNotifications = useMemo<TicketNotification[]>(() => {
     const now = Date.now();
     return tickets
       .filter((ticket) => ownsTicket(ticket))
@@ -647,6 +761,35 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return levelWeight[b.level] - levelWeight[a.level] || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       });
   }, [ownsTicket, tickets]);
+
+  const notifications = useMemo(
+    () => generatedNotifications.filter((notification) => !readNotificationIds.has(notification.id)),
+    [generatedNotifications, readNotificationIds]
+  );
+
+  const clearAllNotifications = useCallback(() => {
+    setReadNotificationIds((current) => {
+      const next = new Set(current);
+      for (const notification of generatedNotifications) next.add(notification.id);
+      saveDismissedNotificationIds(notificationDismissalStorage, notificationDismissalStorageKey, next);
+
+      if (user?.id) {
+        const rows = notificationDismissalRows(user.id, next);
+        if (rows.length) {
+          void backendSupabase
+            .from('notification_dismissals')
+            .upsert(rows, { onConflict: 'user_id,notification_id', ignoreDuplicates: true })
+            .then(({ error: dismissalError }) => {
+              if (dismissalError) {
+                console.warn('Notification dismissal save failed:', getErrorMessage(dismissalError, 'Unknown notification dismissal error'));
+              }
+            });
+        }
+      }
+
+      return next;
+    });
+  }, [generatedNotifications, notificationDismissalStorage, notificationDismissalStorageKey, user?.id]);
 
   const fetchHistoricTickets = useCallback(async () => {
     const response = await fetch('/tickets.json', { cache: 'no-store' });
@@ -731,11 +874,14 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [canSeeTicket]);
 
   const updateTicket = useCallback(
-    async (id: string, patch: Partial<Ticket>, actor = 'Athena') => {
+    async (id: string, patch: Partial<Ticket>, actor = getReporterNameFromAuthUser(user)) => {
       const rowPatch = toRowPatch(patch);
 
       // Get current ticket to compute event diff
       const current = tickets.find((t) => t.id === id);
+      if (current && patch.status && patch.status !== current.status && !canUpdateTicketStatus(current)) {
+        throw new Error('Only the assigned ticket owner or an admin can change this ticket status.');
+      }
 
       // Optimistic update
       setLiveTickets((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -747,7 +893,7 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.error('Update ticket error:', error);
         // Revert via refresh
         await refresh();
-        return;
+        throwSupabaseError(error, 'Ticket update failed');
       }
 
       // Log events for important changes
@@ -759,6 +905,8 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             actor,
             from_value: current.status,
             to_value: patch.status,
+            metadata: patch.metadata?.latestResolution ? { resolution: patch.metadata.latestResolution } : {},
+            created_by: user?.id,
           });
         }
         if (patch.assignedTo && patch.assignedTo !== current.assignedTo) {
@@ -781,7 +929,27 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       }
     },
-    [tickets, refresh]
+    [canUpdateTicketStatus, refresh, tickets, user]
+  );
+
+  const updateTicketStatus = useCallback(
+    async (id: string, detail: TicketStatusUpdateInput, actor = getReporterNameFromAuthUser(user)) => {
+      const current = tickets.find((ticket) => ticket.id === id);
+      if (!current) throw new Error('Ticket not found for status update.');
+      if (!canUpdateTicketStatus(current)) {
+        throw new Error('Only the assigned ticket owner or an admin can change this ticket status.');
+      }
+      if (!detail.reason.trim() || !detail.actionTaken.trim()) {
+        throw new Error('Status changes require a reason and action taken.');
+      }
+
+      const resolution = buildResolutionDetail(current, detail, actor);
+      await updateTicket(id, {
+        status: detail.status,
+        metadata: mergeResolutionMetadata(current.metadata, resolution),
+      }, actor);
+    },
+    [canUpdateTicketStatus, tickets, updateTicket, user]
   );
 
   const createManualTicket = useCallback(
@@ -995,6 +1163,9 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         loading,
         error,
         updateTicket,
+        updateTicketStatus,
+        canUpdateTicketStatus,
+        clearAllNotifications,
         createApprovedTicket,
         createManualTicket,
         deleteTicket,

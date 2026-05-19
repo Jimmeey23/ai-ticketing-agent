@@ -15,11 +15,23 @@ import {
   LocationSetting,
   RoutingRuleSetting,
   RoutingSettings,
+  applyCategoryCityRouting,
   defaultRoutingSettings,
+  inferRoutingCity,
   loadRoutingSettings,
   physique57RoutingPresets,
   saveRoutingSettings,
 } from '@/lib/routing-settings';
+import {
+  EMPTY_ROUTING_FILTERS,
+  applyBulkRoutingOperation,
+  applyRoutingRulePatch,
+  filterRoutingRules,
+  uniqueText,
+  type BulkRoutingOperation,
+  type RoutingFilterState,
+  type RoutingStateFilter,
+} from '@/lib/settings-routing-ops';
 
 const TicketDashboard = lazy(() =>
   import('./ticketing/TicketDashboard').then((module) => ({ default: module.TicketDashboard }))
@@ -276,7 +288,7 @@ const TriageQueuePanel: React.FC = () => {
 };
 
 const NotificationsPanel: React.FC<{ onOpen: (ticket: Ticket) => void }> = ({ onOpen }) => {
-  const { notifications } = useTickets();
+  const { notifications, clearAllNotifications } = useTickets();
   const criticalCount = notifications.filter((notification) => notification.level === 'critical').length;
   const warningCount = notifications.filter((notification) => notification.level === 'warning').length;
 
@@ -289,9 +301,19 @@ const NotificationsPanel: React.FC<{ onOpen: (ticket: Ticket) => void }> = ({ on
       </div>
 
       <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-[0_18px_54px_rgba(15,23,42,0.07)]">
-        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-950 px-4 py-3 text-white">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-950 px-4 py-3 text-white">
           <h3 className="text-sm font-semibold">Ticket Owner Notifications</h3>
-          <span className="text-xs text-slate-300">{notifications.length} active</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-300">{notifications.length} active</span>
+            <button
+              type="button"
+              onClick={clearAllNotifications}
+              disabled={notifications.length === 0}
+              className="h-8 rounded-xl border border-white/20 bg-white/10 px-3 text-xs font-semibold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Clear all notifications
+            </button>
+          </div>
         </div>
         <div className="divide-y divide-slate-100">
           {notifications.map((notification) => (
@@ -583,34 +605,133 @@ const MomenceOpsPanel: React.FC = () => (
   </WorkspacePanel>
 );
 
+function collapseCategoryRouting(settings: RoutingSettings): RoutingSettings {
+  const byKey = new Map<string, RoutingRuleSetting>();
+  for (const rule of settings.routingRules) {
+    const key = `${rule.category}__${rule.location || ''}`;
+    const existing = byKey.get(key);
+    const owners = uniqueText([...(existing?.owners || []), ...(rule.owners?.length ? rule.owners : [rule.owner])]);
+    byKey.set(key, {
+      ...(existing || rule),
+      subCategory: '',
+      owners: owners.length ? owners : [rule.owner].filter(Boolean),
+      owner: owners[0] || existing?.owner || rule.owner,
+      active: (existing?.active ?? false) || rule.active,
+    });
+  }
+  return { ...settings, routingRules: Array.from(byKey.values()) };
+}
+
 const SettingsPanel: React.FC<{ userEmail: string; accessRole: string }> = ({ userEmail, accessRole }) => {
-  const [settings, setSettings] = useState<RoutingSettings>(() => defaultRoutingSettings());
+  const [settings, setSettings] = useState<RoutingSettings>(() => collapseCategoryRouting(defaultRoutingSettings()));
   const [activeSection, setActiveSection] = useState<'routing' | 'employees' | 'departments' | 'locations'>('routing');
+  const [routingFilters, setRoutingFilters] = useState<RoutingFilterState>(EMPTY_ROUTING_FILTERS);
+  const [bulkOwners, setBulkOwners] = useState<string[]>([]);
+  const [bulkDepartment, setBulkDepartment] = useState('');
+  const [bulkEscalation, setBulkEscalation] = useState('');
+  const [bulkPriority, setBulkPriority] = useState<RoutingRuleSetting['priority']>('Medium');
+  const [bulkSlaHours, setBulkSlaHours] = useState('24');
+  const [cityBulkCategory, setCityBulkCategory] = useState('Scheduling');
+  const [cityBulkMumbaiOwners, setCityBulkMumbaiOwners] = useState<string[]>(['Mrigakshi Jaiswal', 'Vivaran Dhasmana']);
+  const [cityBulkBengaluruOwners, setCityBulkBengaluruOwners] = useState<string[]>(['Pushyank Nahar']);
+  const [cityBulkDepartment, setCityBulkDepartment] = useState('Training');
+  const [cityBulkEscalation, setCityBulkEscalation] = useState('Anisha Shah');
+  const [cityBulkPriority, setCityBulkPriority] = useState<RoutingRuleSetting['priority']>('Medium');
+  const [cityBulkSlaHours, setCityBulkSlaHours] = useState('24');
+  const [employeeQuery, setEmployeeQuery] = useState('');
+  const [employeeDepartmentFilters, setEmployeeDepartmentFilters] = useState<string[]>([]);
+  const [employeeLocationFilters, setEmployeeLocationFilters] = useState<string[]>([]);
+  const [departmentQuery, setDepartmentQuery] = useState('');
+  const [locationQuery, setLocationQuery] = useState('');
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState('');
   const isAdmin = accessRole === 'admin';
   const employeeNames = useMemo(() => settings.employees.filter((item) => item.active).map((item) => item.name), [settings.employees]);
   const departments = useMemo(() => settings.departments.filter((item) => item.active).map((item) => item.name), [settings.departments]);
   const locations = useMemo(() => settings.locations.filter((item) => item.active).map((item) => item.name), [settings.locations]);
+  const employeeLocations = useMemo(() => uniqueText(settings.employees.map((item) => item.location || '')), [settings.employees]);
+  const employeeLocationOptions = useMemo(() => uniqueText([...employeeLocations, ...locations]), [employeeLocations, locations]);
+  const routingLocationOptions = useMemo(() => uniqueText(['All locations', ...locations, 'Mumbai', 'Bengaluru']), [locations]);
+  const filteredRoutingRules = useMemo(() => {
+    const byId = new Map<string, RoutingRuleSetting>();
+    for (const rule of filterRoutingRules(settings.routingRules, routingFilters)) {
+      if (!byId.has(rule.id)) byId.set(rule.id, rule);
+    }
+    return Array.from(byId.values());
+  }, [routingFilters, settings.routingRules]);
+  const filteredRoutingRuleIds = useMemo(() => new Set(filteredRoutingRules.map((rule) => rule.id)), [filteredRoutingRules]);
+  const activeFilteredRoutingRules = useMemo(() => filteredRoutingRules.filter((rule) => rule.active).length, [filteredRoutingRules]);
+  const filteredOwnerPoolRules = useMemo(() => filteredRoutingRules.filter((rule) => (rule.owners?.length ? rule.owners : [rule.owner]).length > 1).length, [filteredRoutingRules]);
+  const filteredCities = useMemo(() => uniqueText(filteredRoutingRules.map((rule) => inferRoutingCity(rule.location) || (rule.location ? 'Other' : 'Global'))), [filteredRoutingRules]);
+  const routingFilterCount = useMemo(() => [
+    routingFilters.query.trim(),
+    ...routingFilters.categories,
+    ...routingFilters.departments,
+    ...routingFilters.owners,
+    ...routingFilters.locations,
+    ...routingFilters.priorities,
+    ...routingFilters.states,
+  ].filter(Boolean).length, [routingFilters]);
+  const filteredEmployees = useMemo(() => {
+    const query = employeeQuery.trim().toLowerCase();
+    return settings.employees.filter((employee) => {
+      if (employeeDepartmentFilters.length > 0 && !employeeDepartmentFilters.includes(employee.department)) return false;
+      if (employeeLocationFilters.length > 0 && !employeeLocationFilters.includes(employee.location || '')) return false;
+      if (!query) return true;
+      return [employee.name, employee.email, employee.department, employee.role, employee.location, employee.manager]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [employeeDepartmentFilters, employeeLocationFilters, employeeQuery, settings.employees]);
+  const filteredDepartments = useMemo(() => {
+    const query = departmentQuery.trim().toLowerCase();
+    if (!query) return settings.departments;
+    return settings.departments.filter((department) => [department.name, department.description].filter(Boolean).join(' ').toLowerCase().includes(query));
+  }, [departmentQuery, settings.departments]);
+  const filteredLocations = useMemo(() => {
+    const query = locationQuery.trim().toLowerCase();
+    if (!query) return settings.locations;
+    return settings.locations.filter((location) => [location.name, location.city].filter(Boolean).join(' ').toLowerCase().includes(query));
+  }, [locationQuery, settings.locations]);
 
   useEffect(() => {
     let mounted = true;
     loadRoutingSettings().then((loaded) => {
-      if (mounted) setSettings(loaded);
+      if (mounted) setSettings(collapseCategoryRouting(loaded));
     });
     return () => {
       mounted = false;
     };
   }, []);
 
+  useEffect(() => {
+    if (bulkOwners.length === 0 && employeeNames.length > 0) setBulkOwners([employeeNames[0]]);
+    if (!bulkDepartment && departments.length > 0) setBulkDepartment(departments[0]);
+    if (!bulkEscalation && employeeNames.length > 0) setBulkEscalation(employeeNames[0]);
+    setCityBulkMumbaiOwners((owners) => {
+      const filtered = owners.filter((owner) => employeeNames.includes(owner));
+      const defaults = ['Mrigakshi Jaiswal', 'Vivaran Dhasmana'].filter((owner) => employeeNames.includes(owner));
+      return filtered.length ? filtered : defaults;
+    });
+    setCityBulkBengaluruOwners((owners) => {
+      const filtered = owners.filter((owner) => employeeNames.includes(owner));
+      const defaults = ['Pushyank Nahar'].filter((owner) => employeeNames.includes(owner));
+      return filtered.length ? filtered : defaults;
+    });
+    if (!departments.includes(cityBulkDepartment) && departments.length > 0) setCityBulkDepartment(departments[0]);
+    if (!employeeNames.includes(cityBulkEscalation) && employeeNames.length > 0) setCityBulkEscalation(employeeNames[0]);
+  }, [bulkDepartment, bulkEscalation, bulkOwners.length, cityBulkDepartment, cityBulkEscalation, departments, employeeNames]);
+
   const save = async () => {
     setSaving(true);
     setStatus('');
     try {
       await saveRoutingSettings(settings);
-      setStatus('Settings saved. New drafts will use this routing.');
+      setStatus('Settings saved to Supabase. New drafts will use this routing.');
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Settings saved locally, but Supabase save failed.');
+      setStatus(error instanceof Error ? `Settings not saved: ${error.message}` : 'Settings not saved: Supabase save failed.');
     } finally {
       setSaving(false);
     }
@@ -619,20 +740,7 @@ const SettingsPanel: React.FC<{ userEmail: string; accessRole: string }> = ({ us
   const updateRule = (id: string, patch: Partial<RoutingRuleSetting>) => {
     setSettings((current) => ({
       ...current,
-      routingRules: current.routingRules.map((rule) => {
-        if (rule.id !== id) return rule;
-        const next = { ...rule, ...patch };
-        if (patch.owner || patch.owners) {
-          const owners = patch.owners?.length ? patch.owners : patch.owner ? [patch.owner] : next.owners || [next.owner];
-          next.owners = owners;
-          next.owner = owners[0] || next.owner;
-          const employee = current.employees.find((item) => item.name === next.owner);
-          next.department = employee?.department || next.department;
-          next.escalation = employee?.manager || next.escalation;
-        }
-        if (patch.priority) next.slaHours = PRIORITY_SLA[patch.priority].hours;
-        return next;
-      }),
+      routingRules: current.routingRules.map((rule) => rule.id === id ? applyRoutingRulePatch(rule, patch, current.employees) : rule),
     }));
   };
 
@@ -659,7 +767,6 @@ const SettingsPanel: React.FC<{ userEmail: string; accessRole: string }> = ({ us
 
   const addRule = () => {
     const category = Object.keys(CATEGORIES)[0] || 'General Feedback';
-    const subCategory = CATEGORIES[category]?.[0] || 'Other';
     const owner = employeeNames[0] || ASSOCIATES[0]?.name || 'Nunu Yeptomi';
     const employee = settings.employees.find((item) => item.name === owner);
     setSettings((current) => ({
@@ -668,7 +775,7 @@ const SettingsPanel: React.FC<{ userEmail: string; accessRole: string }> = ({ us
         {
           id: `rule-${Date.now()}`,
           category,
-          subCategory,
+          subCategory: '',
           location: '',
           owner,
           owners: [owner],
@@ -688,16 +795,45 @@ const SettingsPanel: React.FC<{ userEmail: string; accessRole: string }> = ({ us
     setSettings((current) => {
       const byId = new Map(current.routingRules.map((rule) => [rule.id, rule]));
       for (const preset of presets) byId.set(preset.id, preset);
-      return { ...current, routingRules: Array.from(byId.values()) };
+      return collapseCategoryRouting({ ...current, routingRules: Array.from(byId.values()) });
     });
     setStatus('Physique 57 routing presets applied. Review and save settings.');
   };
 
-  const bulkSetActive = (active: boolean) => {
+  const runBulkOperation = (operation: BulkRoutingOperation, label: string) => {
+    if (filteredRoutingRuleIds.size === 0) {
+      setStatus('No category routing rules match the current filters.');
+      return;
+    }
+
     setSettings((current) => ({
       ...current,
-      routingRules: current.routingRules.map((rule) => ({ ...rule, active })),
+      routingRules: applyBulkRoutingOperation(current.routingRules, filteredRoutingRuleIds, operation, current.employees),
     }));
+    setStatus(`${label} applied to ${filteredRoutingRuleIds.size} filtered category routing rules. Save settings to sync Supabase.`);
+  };
+
+  const bulkSetActive = (active: boolean) => runBulkOperation({ type: 'setActive', active }, active ? 'Activate' : 'Pause');
+
+  const applyCityBulkRouting = () => {
+    setSettings((current) => applyCategoryCityRouting(current, {
+      category: cityBulkCategory,
+      department: cityBulkDepartment,
+      escalation: cityBulkEscalation,
+      priority: cityBulkPriority,
+      slaHours: Number(cityBulkSlaHours) || PRIORITY_SLA[cityBulkPriority].hours,
+      cityRouting: [
+        { city: 'Mumbai', owners: cityBulkMumbaiOwners },
+        { city: 'Bengaluru', owners: cityBulkBengaluruOwners },
+      ],
+    }));
+    setRoutingFilters((filters) => ({
+      ...filters,
+      categories: [cityBulkCategory],
+      locations: [],
+      departments: [cityBulkDepartment],
+    }));
+    setStatus(`Applied ${cityBulkCategory} city routing in memory. Save settings to sync it to Supabase.`);
   };
 
   const addEmployee = () => {
@@ -782,82 +918,315 @@ const SettingsPanel: React.FC<{ userEmail: string; accessRole: string }> = ({ us
                 </div>
               ) : null}
             >
-              <div className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-950 to-blue-950 p-4 text-white md:grid-cols-3">
+              <div className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-950 to-blue-950 p-4 text-white md:grid-cols-4">
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-200">Routing coverage</div>
                   <div className="mt-1 text-2xl font-semibold">{settings.routingRules.filter((rule) => rule.active).length}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-200">Owner pools</div>
-                  <div className="mt-1 text-2xl font-semibold">{settings.routingRules.filter((rule) => (rule.owners || [rule.owner]).length > 1).length}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-200">Selected scope</div>
+                  <div className="mt-1 text-2xl font-semibold">{filteredRoutingRules.length}</div>
+                  <div className="mt-0.5 text-[11px] text-blue-100">{routingFilterCount ? `${routingFilterCount} filters active` : 'All category rules'}</div>
                 </div>
-                <div className="flex items-end gap-2 md:justify-end">
-                  <SmallButton onClick={() => bulkSetActive(true)}>Activate all</SmallButton>
-                  <SmallButton onClick={() => bulkSetActive(false)}>Pause all</SmallButton>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-200">Active in scope</div>
+                  <div className="mt-1 text-2xl font-semibold">{activeFilteredRoutingRules}</div>
+                  <div className="mt-0.5 text-[11px] text-blue-100">{filteredOwnerPoolRules} owner-pool rules</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-200">Cities in scope</div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {(filteredCities.length ? filteredCities : ['None']).slice(0, 4).map((city) => (
+                      <span key={city} className="rounded-full bg-white/12 px-2 py-1 text-[11px] font-semibold text-white">{city}</span>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div className="grid gap-3">
-                {settings.routingRules.slice(0, 160).map((rule) => (
-                  <div key={rule.id} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-[0_16px_44px_rgba(15,23,42,0.06)]">
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-slate-950">{rule.category}</div>
-                        <div className="mt-0.5 text-xs text-slate-500">{rule.subCategory || 'All subcategories'} · {rule.location || 'All locations'}</div>
-                      </div>
-                      <SettingsCheckbox disabled={!isAdmin} label="Active" checked={rule.active} onChange={(active) => updateRule(rule.id, { active })} />
+              <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-950">Advanced routing filters</h4>
+                    <p className="mt-0.5 text-xs text-slate-500">Bulk actions apply to the currently filtered category rules.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRoutingFilters(EMPTY_ROUTING_FILTERS)}
+                    className="h-8 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+                  >
+                    Reset filters
+                  </button>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <SettingsInput label="Search" value={routingFilters.query} onChange={(query) => setRoutingFilters((filters) => ({ ...filters, query }))} />
+                  <SettingsMultiSelect
+                    label="Categories"
+                    values={Object.keys(CATEGORIES)}
+                    selected={routingFilters.categories}
+                    placeholder="Search categories..."
+                    emptyText="All categories"
+                    compact
+                    onChange={(categories) => setRoutingFilters((filters) => ({ ...filters, categories }))}
+                  />
+                  <SettingsMultiSelect
+                    label="Departments"
+                    values={departments}
+                    selected={routingFilters.departments}
+                    placeholder="Search departments..."
+                    emptyText="All departments"
+                    compact
+                    onChange={(departments) => setRoutingFilters((filters) => ({ ...filters, departments }))}
+                  />
+                  <SettingsMultiSelect
+                    label="Owners"
+                    values={employeeNames}
+                    selected={routingFilters.owners}
+                    placeholder="Search owners..."
+                    emptyText="All owners"
+                    compact
+                    onChange={(owners) => setRoutingFilters((filters) => ({ ...filters, owners }))}
+                  />
+                  <SettingsMultiSelect
+                    label="Locations"
+                    values={routingLocationOptions}
+                    selected={routingFilters.locations}
+                    placeholder="Search locations..."
+                    emptyText="All locations and cities"
+                    compact
+                    onChange={(locations) => setRoutingFilters((filters) => ({ ...filters, locations }))}
+                  />
+                  <SettingsMultiSelect
+                    label="State"
+                    values={['Active', 'Paused']}
+                    selected={routingFilters.states}
+                    placeholder="Search state..."
+                    emptyText="All states"
+                    compact
+                    onChange={(states) => setRoutingFilters((filters) => ({ ...filters, states: states as RoutingStateFilter[] }))}
+                  />
+                  <SettingsMultiSelect
+                    label="Priority"
+                    values={Object.keys(PRIORITY_SLA)}
+                    selected={routingFilters.priorities}
+                    placeholder="Search priority..."
+                    emptyText="All priorities"
+                    compact
+                    onChange={(priorities) => setRoutingFilters((filters) => ({ ...filters, priorities }))}
+                  />
+                </div>
+              </div>
+              {isAdmin && (
+                <div className="mb-4 rounded-2xl border border-emerald-100 bg-emerald-50/80 p-4">
+                  <div className="mb-3">
+                    <h4 className="text-sm font-semibold text-emerald-950">City split category routing</h4>
+                    <p className="mt-0.5 text-xs text-emerald-700">
+                      Creates or replaces category-level rules for every studio in each city, covering all subcategories.
+                    </p>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-12">
+                    <div className="lg:col-span-3">
+                      <SettingsSelect label="Category" value={cityBulkCategory} values={Object.keys(CATEGORIES)} onChange={setCityBulkCategory} />
                     </div>
-                    <div className="grid gap-3 lg:grid-cols-12">
-                      <div className="lg:col-span-3"><SettingsSelect disabled={!isAdmin} label="Category" value={rule.category} values={Object.keys(CATEGORIES)} onChange={(category) => updateRule(rule.id, { category, subCategory: CATEGORIES[category]?.[0] || 'Other' })} /></div>
-                      <div className="lg:col-span-3"><SettingsSelect disabled={!isAdmin} label="Sub-category" value={rule.subCategory || ''} values={CATEGORIES[rule.category] || ['Other']} onChange={(subCategory) => updateRule(rule.id, { subCategory })} /></div>
-                      <div className="lg:col-span-3"><SettingsSelect disabled={!isAdmin} label="Location" value={rule.location || ''} values={['', ...locations, 'Mumbai', 'Bengaluru']} onChange={(location) => updateRule(rule.id, { location })} /></div>
-                      <div className="lg:col-span-3"><SettingsSelect disabled={!isAdmin} label="Priority" value={rule.priority} values={Object.keys(PRIORITY_SLA)} onChange={(priority) => updateRule(rule.id, { priority: priority as RoutingRuleSetting['priority'] })} /></div>
-                      <div className="lg:col-span-5"><SettingsMultiSelect disabled={!isAdmin} label="Owner pool" values={employeeNames} selected={rule.owners?.length ? rule.owners : [rule.owner]} onChange={(owners) => updateRule(rule.id, { owners, owner: owners[0] || rule.owner })} /></div>
-                      <div className="lg:col-span-3"><SettingsSelect disabled={!isAdmin} label="Department" value={rule.department} values={departments} onChange={(department) => updateRule(rule.id, { department })} /></div>
-                      <div className="lg:col-span-3"><SettingsSelect disabled={!isAdmin} label="Escalation" value={rule.escalation} values={employeeNames} onChange={(escalation) => updateRule(rule.id, { escalation })} /></div>
-                      <div className="lg:col-span-1"><SettingsInput disabled={!isAdmin} label="SLA" value={String(rule.slaHours)} onChange={(slaHours) => updateRule(rule.id, { slaHours: Number(slaHours) || rule.slaHours })} /></div>
+                    <div className="lg:col-span-3">
+                      <SettingsSelect label="Department" value={cityBulkDepartment} values={departments} onChange={setCityBulkDepartment} />
+                    </div>
+                    <div className="lg:col-span-3">
+                      <SettingsSelect label="Escalation" value={cityBulkEscalation} values={employeeNames} onChange={setCityBulkEscalation} />
+                    </div>
+                    <div className="lg:col-span-2">
+                      <SettingsSelect label="Priority" value={cityBulkPriority} values={Object.keys(PRIORITY_SLA)} onChange={(priority) => setCityBulkPriority(priority as RoutingRuleSetting['priority'])} />
+                    </div>
+                    <div className="lg:col-span-1">
+                      <SettingsInput label="SLA" value={cityBulkSlaHours} onChange={setCityBulkSlaHours} />
+                    </div>
+                    <div className="lg:col-span-6">
+                      <SettingsMultiSelect label="Mumbai owners" values={employeeNames} selected={cityBulkMumbaiOwners} placeholder="Search Mumbai owners..." emptyText="No Mumbai owners selected" onChange={setCityBulkMumbaiOwners} />
+                    </div>
+                    <div className="lg:col-span-6">
+                      <SettingsMultiSelect label="Bengaluru owners" values={employeeNames} selected={cityBulkBengaluruOwners} placeholder="Search Bengaluru owners..." emptyText="No Bengaluru owners selected" onChange={setCityBulkBengaluruOwners} />
+                    </div>
+                    <div className="lg:col-span-12">
+                      <SmallButton onClick={applyCityBulkRouting}>Apply city split routing</SmallButton>
                     </div>
                   </div>
+                </div>
+              )}
+              {isAdmin && (
+                <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
+                  <div className="mb-3">
+                    <h4 className="text-sm font-semibold text-blue-950">Bulk operations</h4>
+                    <p className="mt-0.5 text-xs text-blue-700">{filteredRoutingRules.length} category rules selected by current filters.</p>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-12">
+                    <div className="lg:col-span-5">
+                      <SettingsMultiSelect label="Bulk owner pool" values={employeeNames} selected={bulkOwners} placeholder="Search owners..." emptyText="No owners selected" onChange={setBulkOwners} />
+                    </div>
+                    <div className="lg:col-span-3">
+                      <SettingsSelect label="Bulk department" value={bulkDepartment} values={departments} onChange={setBulkDepartment} />
+                    </div>
+                    <div className="lg:col-span-3">
+                      <SettingsSelect label="Bulk escalation" value={bulkEscalation} values={employeeNames} onChange={setBulkEscalation} />
+                    </div>
+                    <div className="lg:col-span-1">
+                      <SettingsInput label="SLA" value={bulkSlaHours} onChange={setBulkSlaHours} />
+                    </div>
+                    <div className="lg:col-span-3">
+                      <SettingsSelect label="Bulk priority" value={bulkPriority} values={Object.keys(PRIORITY_SLA)} onChange={(priority) => setBulkPriority(priority as RoutingRuleSetting['priority'])} />
+                    </div>
+                    <div className="flex flex-wrap items-end gap-2 lg:col-span-9">
+                      <SmallButton disabled={!bulkOwners.length} onClick={() => runBulkOperation({ type: 'setOwners', owners: bulkOwners }, 'Owner pool replacement')}>Set owners</SmallButton>
+                      <SmallButton disabled={!bulkOwners.length} variant="outline" onClick={() => runBulkOperation({ type: 'addOwners', owners: bulkOwners }, 'Owner add')}>Add owners</SmallButton>
+                      <SmallButton disabled={!bulkOwners.length} variant="outline" onClick={() => runBulkOperation({ type: 'removeOwners', owners: bulkOwners }, 'Owner removal')}>Remove owners</SmallButton>
+                      <SmallButton onClick={() => runBulkOperation({ type: 'setDepartment', department: bulkDepartment }, 'Department update')}>Set department</SmallButton>
+                      <SmallButton onClick={() => runBulkOperation({ type: 'setEscalation', escalation: bulkEscalation }, 'Escalation update')}>Set escalation</SmallButton>
+                      <SmallButton onClick={() => runBulkOperation({ type: 'setPriority', priority: bulkPriority }, 'Priority update')}>Set priority</SmallButton>
+                      <SmallButton onClick={() => runBulkOperation({ type: 'setSlaHours', slaHours: Number(bulkSlaHours) || PRIORITY_SLA.Medium.hours }, 'SLA update')}>Set SLA</SmallButton>
+                      <SmallButton variant="success" onClick={() => bulkSetActive(true)}>Activate</SmallButton>
+                      <SmallButton variant="danger" onClick={() => bulkSetActive(false)}>Pause</SmallButton>
+                    </div>
+                  </div>
+                </div>
+              )}
+              <SettingsTable
+                headers={['Category', 'Location', 'Owner Pool', 'Department', 'Escalation', 'Priority', 'SLA', 'Active']}
+                minWidth="min-w-[1320px]"
+              >
+                {filteredRoutingRules.slice(0, 160).map((rule) => (
+                  <tr key={rule.id} className="border-b border-slate-100 align-top last:border-b-0 hover:bg-slate-50/70">
+                    <SettingsTd className="w-[220px]">
+                      <SettingsSelect disabled={!isAdmin} value={rule.category} values={Object.keys(CATEGORIES)} onChange={(category) => updateRule(rule.id, { category })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[220px]">
+                      <SettingsSelect disabled={!isAdmin} value={rule.location || ''} values={['', ...locations, 'Mumbai', 'Bengaluru']} onChange={(location) => updateRule(rule.id, { location })} />
+                      <div className="mt-1 text-[10px] font-semibold text-slate-400">All subcategories</div>
+                    </SettingsTd>
+                    <SettingsTd className="w-[320px]">
+                      <SettingsMultiSelect
+                        disabled={!isAdmin}
+                        values={employeeNames}
+                        selected={rule.owners?.length ? rule.owners : [rule.owner]}
+                        emptyText="No owners"
+                        inline
+                        onChange={(owners) => updateRule(rule.id, { owners, owner: owners[0] || rule.owner })}
+                      />
+                    </SettingsTd>
+                    <SettingsTd className="w-[190px]">
+                      <SettingsSelect disabled={!isAdmin} value={rule.department} values={departments} onChange={(department) => updateRule(rule.id, { department })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[220px]">
+                      <SettingsSelect disabled={!isAdmin} value={rule.escalation} values={employeeNames} onChange={(escalation) => updateRule(rule.id, { escalation })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[140px]">
+                      <SettingsSelect disabled={!isAdmin} value={rule.priority} values={Object.keys(PRIORITY_SLA)} onChange={(priority) => updateRule(rule.id, { priority: priority as RoutingRuleSetting['priority'] })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[100px]">
+                      <SettingsInput disabled={!isAdmin} value={String(rule.slaHours)} onChange={(slaHours) => updateRule(rule.id, { slaHours: Number(slaHours) || rule.slaHours })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[90px]">
+                      <SettingsCheckbox disabled={!isAdmin} checked={rule.active} onChange={(active) => updateRule(rule.id, { active })} />
+                    </SettingsTd>
+                  </tr>
                 ))}
-              </div>
+                {filteredRoutingRules.length === 0 && (
+                  <SettingsEmptyRow colSpan={8}>No category routing rules match the current filters.</SettingsEmptyRow>
+                )}
+              </SettingsTable>
             </SettingsSection>
           )}
 
           {activeSection === 'employees' && (
             <SettingsSection title="Employee Directory" action={isAdmin ? <SmallButton onClick={addEmployee}>Add employee</SmallButton> : null}>
-              <div className="grid gap-3 xl:grid-cols-2">
-                {settings.employees.map((employee) => (
-                  <div key={employee.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
-                    <div className="grid gap-2 md:grid-cols-2">
-                      <SettingsInput disabled={!isAdmin} label="Name" value={employee.name} onChange={(name) => updateEmployee(employee.id, { name })} />
-                      <SettingsInput disabled={!isAdmin} label="Email" value={employee.email || ''} onChange={(email) => updateEmployee(employee.id, { email })} />
-                      <SettingsSelect disabled={!isAdmin} label="Department" value={employee.department} values={departments} onChange={(department) => updateEmployee(employee.id, { department })} />
-                      <SettingsSelect disabled={!isAdmin} label="Manager" value={employee.manager || ''} values={employeeNames} onChange={(manager) => updateEmployee(employee.id, { manager })} />
-                      <SettingsInput disabled={!isAdmin} label="Role" value={employee.role || ''} onChange={(role) => updateEmployee(employee.id, { role })} />
-                      <SettingsSelect disabled={!isAdmin} label="Location" value={employee.location || ''} values={locations} onChange={(location) => updateEmployee(employee.id, { location })} />
-                    </div>
-                  </div>
-                ))}
+              <div className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 md:grid-cols-3">
+                <SettingsInput label="Search employees" value={employeeQuery} onChange={setEmployeeQuery} />
+                <SettingsMultiSelect
+                  label="Departments"
+                  values={departments}
+                  selected={employeeDepartmentFilters}
+                  placeholder="Search departments..."
+                  emptyText="All departments"
+                  compact
+                  onChange={setEmployeeDepartmentFilters}
+                />
+                <SettingsMultiSelect
+                  label="Locations"
+                  values={employeeLocations}
+                  selected={employeeLocationFilters}
+                  placeholder="Search locations..."
+                  emptyText="All locations"
+                  compact
+                  onChange={setEmployeeLocationFilters}
+                />
               </div>
+              <SettingsTable
+                headers={['Name', 'Email', 'Department', 'Manager', 'Role', 'Location', 'Active']}
+                minWidth="min-w-[1180px]"
+              >
+                {filteredEmployees.map((employee) => (
+                  <tr key={employee.id} className="border-b border-slate-100 align-top last:border-b-0 hover:bg-slate-50/70">
+                    <SettingsTd className="w-[170px]">
+                      <SettingsInput disabled={!isAdmin} value={employee.name} onChange={(name) => updateEmployee(employee.id, { name })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[220px]">
+                      <SettingsInput disabled={!isAdmin} value={employee.email || ''} onChange={(email) => updateEmployee(employee.id, { email })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[190px]">
+                      <SettingsSelect disabled={!isAdmin} value={employee.department} values={departments} onChange={(department) => updateEmployee(employee.id, { department })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[190px]">
+                      <SettingsSelect disabled={!isAdmin} value={employee.manager || ''} values={employeeNames} onChange={(manager) => updateEmployee(employee.id, { manager })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[200px]">
+                      <SettingsInput disabled={!isAdmin} value={employee.role || ''} onChange={(role) => updateEmployee(employee.id, { role })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[210px]">
+                      <SettingsSelect disabled={!isAdmin} value={employee.location || ''} values={employeeLocationOptions} onChange={(location) => updateEmployee(employee.id, { location })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[90px]">
+                      <SettingsCheckbox disabled={!isAdmin} checked={employee.active} onChange={(active) => updateEmployee(employee.id, { active })} />
+                    </SettingsTd>
+                  </tr>
+                ))}
+                {filteredEmployees.length === 0 && (
+                  <SettingsEmptyRow colSpan={7}>No employees match the current filters.</SettingsEmptyRow>
+                )}
+              </SettingsTable>
             </SettingsSection>
           )}
 
           {activeSection === 'departments' && (
             <SettingsSection title="Departments" action={isAdmin ? <SmallButton onClick={addDepartment}>Add department</SmallButton> : null}>
-              <SettingsList items={settings.departments} disabled={!isAdmin} onChange={updateDepartment} />
+              <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                <SettingsInput label="Search departments" value={departmentQuery} onChange={setDepartmentQuery} />
+              </div>
+              <SettingsList items={filteredDepartments} disabled={!isAdmin} onChange={updateDepartment} />
             </SettingsSection>
           )}
 
           {activeSection === 'locations' && (
             <SettingsSection title="Locations" action={isAdmin ? <SmallButton onClick={addLocation}>Add location</SmallButton> : null}>
-              <div className="grid gap-3 md:grid-cols-2">
-                {settings.locations.map((location) => (
-                  <div key={location.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
-                    <SettingsInput disabled={!isAdmin} label="Studio / Location" value={location.name} onChange={(name) => updateLocation(location.id, { name })} />
-                    <SettingsInput disabled={!isAdmin} label="City" value={location.city || ''} onChange={(city) => updateLocation(location.id, { city })} />
-                    <SettingsCheckbox disabled={!isAdmin} label="Active" checked={location.active} onChange={(active) => updateLocation(location.id, { active })} />
-                  </div>
-                ))}
+              <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                <SettingsInput label="Search locations" value={locationQuery} onChange={setLocationQuery} />
               </div>
+              <SettingsTable
+                headers={['Studio / Location', 'City', 'Active']}
+                minWidth="min-w-[680px]"
+              >
+                {filteredLocations.map((location) => (
+                  <tr key={location.id} className="border-b border-slate-100 align-top last:border-b-0 hover:bg-slate-50/70">
+                    <SettingsTd className="w-[360px]">
+                      <SettingsInput disabled={!isAdmin} value={location.name} onChange={(name) => updateLocation(location.id, { name })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[220px]">
+                      <SettingsInput disabled={!isAdmin} value={location.city || ''} onChange={(city) => updateLocation(location.id, { city })} />
+                    </SettingsTd>
+                    <SettingsTd className="w-[90px]">
+                      <SettingsCheckbox disabled={!isAdmin} checked={location.active} onChange={(active) => updateLocation(location.id, { active })} />
+                    </SettingsTd>
+                  </tr>
+                ))}
+                {filteredLocations.length === 0 && (
+                  <SettingsEmptyRow colSpan={3}>No locations match the current search.</SettingsEmptyRow>
+                )}
+              </SettingsTable>
             </SettingsSection>
           )}
         </div>
@@ -879,11 +1248,55 @@ const SettingsSection: React.FC<{ title: string; action?: React.ReactNode; child
   </div>
 );
 
-const SmallButton: React.FC<{ onClick: () => void; children: React.ReactNode }> = ({ onClick, children }) => (
-  <button type="button" onClick={onClick} className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-blue-700">
-    {children}
-  </button>
+const SettingsTable: React.FC<{ headers: string[]; minWidth?: string; children: React.ReactNode }> = ({ headers, minWidth = 'min-w-[900px]', children }) => (
+  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+    <div className="overflow-x-auto">
+      <table className={`w-full border-collapse text-left ${minWidth}`}>
+        <thead className="bg-slate-100/90">
+          <tr>
+            {headers.map((header) => (
+              <th key={header} scope="col" className="border-b border-slate-200 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 bg-white">
+          {children}
+        </tbody>
+      </table>
+    </div>
+  </div>
 );
+
+const SettingsTd: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
+  <td className={`px-3 py-2 ${className}`}>
+    {children}
+  </td>
+);
+
+const SettingsEmptyRow: React.FC<{ colSpan: number; children: React.ReactNode }> = ({ colSpan, children }) => (
+  <tr>
+    <td colSpan={colSpan} className="px-4 py-10 text-center text-sm font-semibold text-slate-500">
+      {children}
+    </td>
+  </tr>
+);
+
+const SmallButton: React.FC<{ onClick: () => void; children: React.ReactNode; disabled?: boolean; variant?: 'primary' | 'outline' | 'danger' | 'success' }> = ({ onClick, children, disabled, variant = 'primary' }) => {
+  const classes = {
+    primary: 'bg-blue-600 text-white hover:bg-blue-700',
+    outline: 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100',
+    danger: 'bg-rose-600 text-white hover:bg-rose-700',
+    success: 'bg-emerald-600 text-white hover:bg-emerald-700',
+  }[variant];
+
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} className={`rounded-xl px-3 py-2 text-xs font-bold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${classes}`}>
+      {children}
+    </button>
+  );
+};
 
 const SettingsInput: React.FC<{ label?: string; value: string; disabled?: boolean; onChange: (value: string) => void }> = ({ label, value, disabled, onChange }) => (
   <label className="block">
@@ -911,24 +1324,71 @@ const SettingsSelect: React.FC<{ label?: string; value: string; values: string[]
   </label>
 );
 
-const SettingsMultiSelect: React.FC<{ label?: string; values: string[]; selected: string[]; disabled?: boolean; onChange: (value: string[]) => void }> = ({ label, values, selected, disabled, onChange }) => {
+const SettingsMultiSelect: React.FC<{
+  label?: string;
+  values: string[];
+  selected: string[];
+  disabled?: boolean;
+  placeholder?: string;
+  emptyText?: string;
+  compact?: boolean;
+  inline?: boolean;
+  onChange: (value: string[]) => void;
+}> = ({ label, values, selected, disabled, placeholder = 'Search options...', emptyText = 'No options selected', compact, inline, onChange }) => {
   const [query, setQuery] = useState('');
-  const filtered = values.filter((value) => value.toLowerCase().includes(query.toLowerCase())).slice(0, 18);
-  const selectedSet = new Set(selected);
+  const normalizedValues = uniqueText(values);
+  const normalizedSelected = uniqueText(selected);
+  const filtered = normalizedValues.filter((value) => value.toLowerCase().includes(query.toLowerCase())).slice(0, compact ? 10 : 18);
+  const selectedSet = new Set(normalizedSelected);
+  const availableValues = normalizedValues.filter((value) => !selectedSet.has(value));
   const toggle = (value: string) => {
     if (disabled) return;
     const next = selectedSet.has(value)
-      ? selected.filter((item) => item !== value)
-      : [...selected, value];
+      ? normalizedSelected.filter((item) => item !== value)
+      : [...normalizedSelected, value];
     onChange(next);
   };
+
+  if (inline) {
+    return (
+      <div>
+        {label && <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{label}</span>}
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-2">
+          <div className="mb-2 flex min-h-7 flex-wrap gap-1.5">
+            {normalizedSelected.length ? normalizedSelected.map((item) => (
+              <button
+                key={item}
+                type="button"
+                disabled={disabled}
+                onClick={() => toggle(item)}
+                className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 disabled:cursor-default"
+              >
+                {item} x
+              </button>
+            )) : <span className="px-1 py-1 text-xs text-slate-400">{emptyText}</span>}
+          </div>
+          <select
+            value=""
+            disabled={disabled || availableValues.length === 0}
+            onChange={(event) => {
+              if (event.target.value) toggle(event.target.value);
+            }}
+            className="h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-100 disabled:text-slate-400"
+          >
+            <option value="">Add owner...</option>
+            {availableValues.map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
       {label && <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{label}</span>}
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-2">
         <div className="mb-2 flex flex-wrap gap-1.5">
-          {selected.length ? selected.map((item) => (
+          {normalizedSelected.length ? normalizedSelected.map((item) => (
             <button
               key={item}
               type="button"
@@ -938,16 +1398,16 @@ const SettingsMultiSelect: React.FC<{ label?: string; values: string[]; selected
             >
               {item}
             </button>
-          )) : <span className="px-1 text-xs text-slate-400">No owners selected</span>}
+          )) : <span className="px-1 text-xs text-slate-400">{emptyText}</span>}
         </div>
         <input
           value={query}
           disabled={disabled}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search owners..."
+          placeholder={placeholder}
           className="mb-2 h-8 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-100"
         />
-        <div className="grid max-h-36 gap-1 overflow-y-auto sm:grid-cols-2">
+        <div className={`grid gap-1 overflow-y-auto ${compact ? 'max-h-28' : 'max-h-36 sm:grid-cols-2'}`}>
           {filtered.map((value) => (
             <button
               key={value}
@@ -959,6 +1419,9 @@ const SettingsMultiSelect: React.FC<{ label?: string; values: string[]; selected
               {value}
             </button>
           ))}
+          {filtered.length === 0 && (
+            <div className="rounded-xl bg-white px-2 py-2 text-[11px] font-semibold text-slate-400">No matching options</div>
+          )}
         </div>
       </div>
     </div>
@@ -973,15 +1436,27 @@ const SettingsCheckbox: React.FC<{ label?: string; checked: boolean; disabled?: 
 );
 
 const SettingsList: React.FC<{ items: DepartmentSetting[]; disabled: boolean; onChange: (id: string, patch: Partial<DepartmentSetting>) => void }> = ({ items, disabled, onChange }) => (
-  <div className="grid gap-3 md:grid-cols-2">
+  <SettingsTable
+    headers={['Department', 'Description', 'Active']}
+    minWidth="min-w-[760px]"
+  >
     {items.map((item) => (
-      <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
-        <SettingsInput disabled={disabled} label="Name" value={item.name} onChange={(name) => onChange(item.id, { name })} />
-        <SettingsInput disabled={disabled} label="Description" value={item.description || ''} onChange={(description) => onChange(item.id, { description })} />
-        <div className="mt-2"><SettingsCheckbox disabled={disabled} label="Active" checked={item.active} onChange={(active) => onChange(item.id, { active })} /></div>
-      </div>
+      <tr key={item.id} className="border-b border-slate-100 align-top last:border-b-0 hover:bg-slate-50/70">
+        <SettingsTd className="w-[240px]">
+          <SettingsInput disabled={disabled} value={item.name} onChange={(name) => onChange(item.id, { name })} />
+        </SettingsTd>
+        <SettingsTd className="w-[420px]">
+          <SettingsInput disabled={disabled} value={item.description || ''} onChange={(description) => onChange(item.id, { description })} />
+        </SettingsTd>
+        <SettingsTd className="w-[90px]">
+          <SettingsCheckbox disabled={disabled} checked={item.active} onChange={(active) => onChange(item.id, { active })} />
+        </SettingsTd>
+      </tr>
     ))}
-  </div>
+    {items.length === 0 && (
+      <SettingsEmptyRow colSpan={3}>No departments match the current search.</SettingsEmptyRow>
+    )}
+  </SettingsTable>
 );
 
 export default AppLayout;

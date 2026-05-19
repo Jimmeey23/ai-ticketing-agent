@@ -1,0 +1,211 @@
+import { describe, expect, it, vi } from 'vitest';
+
+const backendMocks = vi.hoisted(() => ({
+  upsert: vi.fn(async () => ({ error: null })),
+  selectOrder: vi.fn(async () => ({ data: [], error: null })),
+}));
+
+vi.mock('@/lib/backend-supabase', () => ({
+  backendSupabase: {
+    from: (table: string) => ({
+      select: () => ({
+        order: backendMocks.selectOrder,
+      }),
+      upsert: (rows: Record<string, unknown>[], options?: Record<string, unknown>) => backendMocks.upsert(table, rows, options),
+      delete: () => ({
+        in: vi.fn(async () => ({ error: null })),
+      }),
+    }),
+  },
+}));
+
+import {
+  applyCategoryCityRouting,
+  defaultRoutingSettings,
+  physique57RoutingPresets,
+  resolveAssignmentFromSettings,
+  saveRoutingSettings,
+  type RoutingSettings,
+} from './routing-settings';
+
+describe('routing settings', () => {
+  it('generates default routing rules at category level instead of per subcategory', () => {
+    const settings = defaultRoutingSettings();
+
+    expect(settings.routingRules.length).toBeGreaterThan(0);
+    expect(settings.routingRules.every((rule) => !rule.subCategory)).toBe(true);
+  });
+
+  it('generates unique routing rule ids for presets and defaults', () => {
+    const presetIds = physique57RoutingPresets().map((rule) => rule.id);
+    const defaultIds = defaultRoutingSettings().routingRules.map((rule) => rule.id);
+
+    expect(new Set(presetIds).size).toBe(presetIds.length);
+    expect(new Set(defaultIds).size).toBe(defaultIds.length);
+  });
+
+  it('uses a category-level rule for any subcategory in that category', () => {
+    const settings: RoutingSettings = {
+      departments: [],
+      employees: [],
+      locations: [],
+      routingRules: [
+        {
+          id: 'facility-category',
+          category: 'Facility & Equipment',
+          subCategory: '',
+          location: '',
+          owner: 'Zahur Shaikh',
+          owners: ['Zahur Shaikh'],
+          department: 'Operations',
+          escalation: 'Saachi Shetty - Operations',
+          priority: 'High',
+          slaHours: 8,
+          active: true,
+        },
+      ],
+    };
+
+    expect(
+      resolveAssignmentFromSettings(settings, 'Facility & Equipment', 'Locker Room / Changing Area', 'Kwality House, Kemps Corner')
+    ).toMatchObject({
+      assignedTo: 'Zahur Shaikh',
+      team: 'Operations',
+      nextEscalation: 'Saachi Shetty - Operations',
+      priority: 'High',
+      slaHours: 8,
+      source: 'admin_routing',
+    });
+  });
+
+  it('keeps active legacy subcategory-specific rules more specific than category rules', () => {
+    const settings: RoutingSettings = {
+      departments: [],
+      employees: [],
+      locations: [],
+      routingRules: [
+        {
+          id: 'billing-category',
+          category: 'Billing & Membership',
+          subCategory: '',
+          location: '',
+          owner: 'Pujal Jathar',
+          owners: ['Pujal Jathar'],
+          department: 'Accounts',
+          escalation: 'Sachin Nalawade',
+          priority: 'Medium',
+          slaHours: 24,
+          active: true,
+        },
+        {
+          id: 'billing-refund',
+          category: 'Billing & Membership',
+          subCategory: 'Refund Request',
+          location: '',
+          owner: 'Gaurav Sogam',
+          owners: ['Gaurav Sogam'],
+          department: 'Accounts',
+          escalation: 'Sachin Nalawade',
+          priority: 'High',
+          slaHours: 8,
+          active: true,
+        },
+      ],
+    };
+
+    expect(
+      resolveAssignmentFromSettings(settings, 'Billing & Membership', 'Refund Request', 'Physique 57, Mumbai')
+    ).toMatchObject({
+      assignedTo: 'Gaurav Sogam',
+      priority: 'High',
+      slaHours: 8,
+    });
+  });
+
+  it('applies city-level Scheduling routing for all subcategories in Mumbai and Bengaluru', () => {
+    const settings = applyCategoryCityRouting(defaultRoutingSettings(), {
+      category: 'Scheduling',
+      department: 'Training',
+      escalation: 'Anisha Shah',
+      priority: 'Medium',
+      cityRouting: [
+        {
+          city: 'Mumbai',
+          owners: ['Mrigakshi Jaiswal', 'Vivaran Dhasmana'],
+        },
+        {
+          city: 'Bengaluru',
+          owners: ['Pushyank Nahar'],
+        },
+      ],
+    });
+
+    expect(
+      resolveAssignmentFromSettings(settings, 'Scheduling', 'Trainer Preferences', 'Kwality House, Kemps Corner')
+    ).toMatchObject({
+      assignedTo: 'Mrigakshi Jaiswal',
+      ownerPool: ['Mrigakshi Jaiswal', 'Vivaran Dhasmana'],
+      team: 'Training',
+      nextEscalation: 'Anisha Shah',
+    });
+    expect(
+      resolveAssignmentFromSettings(settings, 'Scheduling', 'Booking Confirmation Issues', 'Supreme HQ, Bandra')
+    ).toMatchObject({
+      assignedTo: 'Mrigakshi Jaiswal',
+      ownerPool: ['Mrigakshi Jaiswal', 'Vivaran Dhasmana'],
+      team: 'Training',
+      nextEscalation: 'Anisha Shah',
+    });
+    expect(
+      resolveAssignmentFromSettings(settings, 'Scheduling', 'Weekend vs. Weekday Class Balance', 'Kenkere House, Bengaluru')
+    ).toMatchObject({
+      assignedTo: 'Pushyank Nahar',
+      ownerPool: ['Pushyank Nahar'],
+      team: 'Training',
+      nextEscalation: 'Anisha Shah',
+    });
+  });
+
+  it('does not save settings locally when Supabase persistence fails', async () => {
+    const setItem = vi.fn();
+    vi.stubGlobal('window', {
+      localStorage: {
+        setItem,
+      },
+    });
+    backendMocks.upsert.mockResolvedValueOnce({ error: new Error('remote write failed') });
+
+    await expect(saveRoutingSettings(defaultRoutingSettings())).rejects.toThrow('remote write failed');
+    expect(setItem).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+    backendMocks.upsert.mockResolvedValue({ error: null });
+  });
+
+  it('saves location short names for existing Supabase location schemas', async () => {
+    vi.stubGlobal('window', {
+      localStorage: {
+        setItem: vi.fn(),
+      },
+    });
+
+    await saveRoutingSettings(defaultRoutingSettings());
+
+    const locationsUpsert = backendMocks.upsert.mock.calls.find(([table]) => table === 'locations');
+    expect(locationsUpsert).toBeTruthy();
+    expect(locationsUpsert?.[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'kwality-house-kemps-corner',
+          short_name: 'Kwality House, Kemps Corner',
+          color: expect.any(String),
+          capacity: expect.any(Number),
+          avg_fill_rate: expect.any(Number),
+        }),
+      ])
+    );
+    expect((locationsUpsert?.[1] as Array<{ capacity?: number }>)[0].capacity).toBeGreaterThan(0);
+
+    vi.unstubAllGlobals();
+  });
+});

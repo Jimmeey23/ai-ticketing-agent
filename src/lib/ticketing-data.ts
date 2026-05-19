@@ -725,6 +725,25 @@ export function resolveTicketDepartment(category: string, assignedTo: string): s
   return 'Customer Service';
 }
 
+export interface TicketResolutionDetail {
+  status: typeof STATUSES[number];
+  previousStatus?: typeof STATUSES[number];
+  reason: string;
+  actionTaken: string;
+  actionDate: string;
+  followUpDate?: string;
+  comments?: string;
+  notes?: string;
+  actor?: string;
+  createdAt: string;
+}
+
+export interface TicketMetadata {
+  latestResolution?: TicketResolutionDetail;
+  resolutionHistory?: TicketResolutionDetail[];
+  [key: string]: unknown;
+}
+
 export interface Ticket {
   id: string;
   title: string;
@@ -750,6 +769,7 @@ export interface Ticket {
   attachments?: string[];
   conversationSummary?: string;
   sourceRef?: string;
+  metadata?: TicketMetadata;
 }
 
 export type SlaState = 'Breached' | 'At Risk' | 'On Track' | 'Closed';

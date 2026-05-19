@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Ticket, PRIORITY_SLA, STATUSES, ASSOCIATES, CATEGORIES, STUDIOS, CLASS_TYPES, TRAINERS, getEscalationTarget } from '@/lib/ticketing-data';
-import { useTickets } from './TicketContext';
+import { TicketStatusUpdateInput, useTickets } from './TicketContext';
 import { X, Clock, MapPin, User, Calendar, Tag, MessageSquare, Phone, Lock, Pencil, Save, Trash2 } from 'lucide-react';
 import { MomenceAutomationPanel } from './MomenceAutomationPanel';
 
@@ -9,17 +9,34 @@ interface Props {
   onClose: () => void;
 }
 
+function defaultStatusValues(ticket?: Ticket | null): TicketStatusUpdateInput {
+  return {
+    status: ticket?.status || 'New',
+    reason: '',
+    actionTaken: '',
+    actionDate: new Date().toISOString().slice(0, 10),
+    followUpDate: '',
+    comments: '',
+    notes: '',
+  };
+}
+
 export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
-  const { updateTicket, deleteTicket } = useTickets();
+  const { updateTicket, updateTicketStatus, canUpdateTicketStatus, deleteTicket } = useTickets();
   const [editingLinkedContext, setEditingLinkedContext] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [statusSaving, setStatusSaving] = useState(false);
+  const [statusError, setStatusError] = useState('');
   const [editValues, setEditValues] = useState<Partial<Ticket>>({});
+  const [statusValues, setStatusValues] = useState<TicketStatusUpdateInput>(() => defaultStatusValues(ticket));
 
   useEffect(() => {
     setEditingLinkedContext(false);
     setEditing(false);
     setEditValues(ticket || {});
+    setStatusValues(defaultStatusValues(ticket));
+    setStatusError('');
   }, [ticket]);
 
   if (!ticket) return null;
@@ -27,6 +44,10 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
   const priorityMeta = PRIORITY_SLA[ticket.priority];
   const currentValues = { ...ticket, ...editValues };
   const subCategories = CATEGORIES[currentValues.category || ticket.category] || ['Other'];
+  const statusAllowed = canUpdateTicketStatus(ticket);
+  const statusChanged = statusValues.status !== ticket.status;
+  const statusReady = statusAllowed && statusChanged && Boolean(statusValues.reason.trim()) && Boolean(statusValues.actionTaken.trim());
+  const latestResolution = ticket.metadata?.latestResolution;
 
   const saveEdits = async () => {
     setSaving(true);
@@ -37,7 +58,6 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
         category: currentValues.category,
         subCategory: currentValues.subCategory,
         priority: currentValues.priority,
-        status: currentValues.status,
         studio: currentValues.studio,
         trainer: currentValues.trainer,
         classType: currentValues.classType,
@@ -57,6 +77,21 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
     if (!window.confirm(`Delete ticket ${ticket.id}? This permanently removes the submitted ticket from the backend.`)) return;
     await deleteTicket(ticket.id);
     onClose();
+  };
+
+  const submitStatusUpdate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!statusReady) return;
+    setStatusSaving(true);
+    setStatusError('');
+    try {
+      await updateTicketStatus(ticket.id, statusValues);
+      setStatusValues(defaultStatusValues({ ...ticket, status: statusValues.status }));
+    } catch (error) {
+      setStatusError(error instanceof Error ? error.message : 'Unable to update ticket status.');
+    } finally {
+      setStatusSaving(false);
+    }
   };
 
   return (
@@ -114,22 +149,107 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
         </div>
 
         <div className="p-5 space-y-5">
-          {/* Status updater */}
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2 block">Status</label>
-            <select
-              value={editing ? currentValues.status : ticket.status}
-              onChange={(e) => {
-                if (editing) setEditValues((values) => ({ ...values, status: e.target.value as Ticket['status'] }));
-                else updateTicket(ticket.id, { status: e.target.value as Ticket['status'] });
-              }}
-              className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 text-slate-900 dark:text-slate-100"
-            >
-              {STATUSES.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </select>
-          </div>
+          <form onSubmit={submitStatusUpdate} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Status and resolution</label>
+                <p className="mt-1 text-xs text-slate-500">
+                  Status changes require owner/admin access plus reason and action taken.
+                </p>
+              </div>
+              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                Current: {ticket.status}
+              </span>
+            </div>
+
+            {!statusAllowed && (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                Only the assigned owner or an admin can change this ticket status.
+              </div>
+            )}
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <EditSelect
+                label="New status"
+                value={statusValues.status}
+                values={STATUSES}
+                disabled={!statusAllowed}
+                onChange={(status) => setStatusValues((values) => ({ ...values, status: status as Ticket['status'] }))}
+              />
+              <EditText
+                label="Action date"
+                value={statusValues.actionDate}
+                type="date"
+                disabled={!statusAllowed}
+                onChange={(actionDate) => setStatusValues((values) => ({ ...values, actionDate }))}
+              />
+              <div className="md:col-span-2">
+                <EditText
+                  label="Reason for status change"
+                  value={statusValues.reason}
+                  disabled={!statusAllowed}
+                  onChange={(reason) => setStatusValues((values) => ({ ...values, reason }))}
+                />
+              </div>
+              <div className="md:col-span-2">
+                <EditTextarea
+                  label="Action taken"
+                  value={statusValues.actionTaken}
+                  rows={3}
+                  disabled={!statusAllowed}
+                  onChange={(actionTaken) => setStatusValues((values) => ({ ...values, actionTaken }))}
+                />
+              </div>
+              <EditText
+                label="Follow-up date"
+                value={statusValues.followUpDate || ''}
+                type="date"
+                disabled={!statusAllowed}
+                onChange={(followUpDate) => setStatusValues((values) => ({ ...values, followUpDate }))}
+              />
+              <EditText
+                label="Comments"
+                value={statusValues.comments || ''}
+                disabled={!statusAllowed}
+                onChange={(comments) => setStatusValues((values) => ({ ...values, comments }))}
+              />
+              <div className="md:col-span-2">
+                <EditTextarea
+                  label="Internal notes"
+                  value={statusValues.notes || ''}
+                  rows={3}
+                  disabled={!statusAllowed}
+                  onChange={(notes) => setStatusValues((values) => ({ ...values, notes }))}
+                />
+              </div>
+            </div>
+
+            {latestResolution && (
+              <div className="mt-3 rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs text-slate-600">
+                <div className="font-semibold text-slate-800">Latest resolution note</div>
+                <div className="mt-1">Reason: {latestResolution.reason}</div>
+                <div className="mt-0.5">Action: {latestResolution.actionTaken}</div>
+                {latestResolution.followUpDate && <div className="mt-0.5">Follow-up: {latestResolution.followUpDate}</div>}
+              </div>
+            )}
+
+            {statusError && (
+              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                {statusError}
+              </div>
+            )}
+
+            <div className="mt-3 flex justify-end">
+              <button
+                type="submit"
+                disabled={!statusReady || statusSaving}
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Save className="h-3.5 w-3.5" />
+                {statusSaving ? 'Saving...' : 'Save status update'}
+              </button>
+            </div>
+          </form>
 
           <div>
             <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2 block">Assigned To</label>
@@ -250,24 +370,40 @@ const Field: React.FC<{ icon: React.ReactNode; label: string; value: string }> =
   </div>
 );
 
-const EditText: React.FC<{ label: string; value: string; onChange: (value: string) => void }> = ({ label, value, onChange }) => (
+const EditText: React.FC<{ label: string; value: string; type?: string; disabled?: boolean; onChange: (value: string) => void }> = ({ label, value, type = 'text', disabled, onChange }) => (
   <label className="grid gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
     {label}
     <input
+      type={type}
       value={value}
+      disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
-      className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-medium normal-case tracking-normal text-stone-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+      className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-medium normal-case tracking-normal text-stone-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-100 disabled:text-slate-500"
     />
   </label>
 );
 
-const EditSelect: React.FC<{ label: string; value: string; values: string[] | readonly string[]; onChange: (value: string) => void }> = ({ label, value, values, onChange }) => (
+const EditTextarea: React.FC<{ label: string; value: string; rows?: number; disabled?: boolean; onChange: (value: string) => void }> = ({ label, value, rows = 3, disabled, onChange }) => (
+  <label className="grid gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+    {label}
+    <textarea
+      value={value}
+      rows={rows}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+      className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm font-medium normal-case tracking-normal text-stone-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-100 disabled:text-slate-500"
+    />
+  </label>
+);
+
+const EditSelect: React.FC<{ label: string; value: string; values: string[] | readonly string[]; disabled?: boolean; onChange: (value: string) => void }> = ({ label, value, values, disabled, onChange }) => (
   <label className="grid gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
     {label}
     <select
       value={value}
+      disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
-      className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-medium normal-case tracking-normal text-stone-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+      className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-medium normal-case tracking-normal text-stone-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-100 disabled:text-slate-500"
     >
       {values.map((item) => (
         <option key={item} value={item}>{item || 'None'}</option>

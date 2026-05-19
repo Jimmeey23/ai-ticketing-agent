@@ -33,6 +33,10 @@ export interface LocationSetting {
   id: string;
   name: string;
   city?: string;
+  color?: string;
+  capacity?: number;
+  avgFillRate?: number;
+  sortOrder?: number;
   active: boolean;
 }
 
@@ -68,6 +72,7 @@ export interface ResolvedAssignment {
 }
 
 const STORAGE_KEY = 'athena-routing-settings-v1';
+const DEFAULT_LOCATION_CAPACITY = 20;
 
 function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -75,6 +80,60 @@ function slug(value: string): string {
 
 function unique(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function normalizedOwners(rule: RoutingRuleSetting): string[] {
+  return unique(rule.owners?.length ? rule.owners : rule.owner ? [rule.owner] : []);
+}
+
+function mergeRoutingRules(rules: RoutingRuleSetting[]): RoutingRuleSetting[] {
+  const byId = new Map<string, RoutingRuleSetting>();
+
+  for (const rule of rules) {
+    const id = rule.id || routingRuleId(rule.category, rule.location || '', rule.subCategory || '');
+    const owners = normalizedOwners(rule);
+    const normalized = {
+      ...rule,
+      id,
+      owners,
+      owner: owners[0] || rule.owner,
+    };
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, normalized);
+      continue;
+    }
+
+    const mergedOwners = unique([...normalizedOwners(existing), ...owners]);
+    byId.set(id, {
+      ...existing,
+      owners: mergedOwners,
+      owner: mergedOwners[0] || existing.owner || normalized.owner,
+      active: existing.active || normalized.active,
+    });
+  }
+
+  return Array.from(byId.values());
+}
+
+function routingRuleId(category: string, location = '', subCategory = ''): string {
+  return slug(`${category}-${subCategory || 'all'}-${location || 'all'}`);
+}
+
+export function inferRoutingCity(location?: string): string {
+  const normalized = String(location || '').toLowerCase();
+  if (/bengaluru|bangalore|kenkere|copper/.test(normalized)) return 'Bengaluru';
+  if (/mumbai|bandra|supreme|kwality|kemps|courtside/.test(normalized)) return 'Mumbai';
+  return '';
+}
+
+function locationColor(id: string, name: string, city?: string): string {
+  const value = `${id} ${name} ${city || ''}`.toLowerCase();
+  if (/supreme|bandra/.test(value)) return '#7c3aed';
+  if (/kenkere|bengaluru|bangalore/.test(value)) return '#059669';
+  if (/copper|cloves/.test(value)) return '#dc2626';
+  if (/courtside/.test(value)) return '#0891b2';
+  return '#2563eb';
 }
 
 const SUPPLEMENTAL_EMPLOYEES: EmployeeSetting[] = [
@@ -106,10 +165,6 @@ const ACCOUNTS_CATEGORIES = ['Billing & Membership', 'Pricing and Memberships'];
 const MARKETING_CATEGORIES = ['Hosted Class & Partnerships'];
 const BRAND_CATEGORIES = ['Brand Feedback'];
 
-function categorySubcategories(category: string): string[] {
-  return CATEGORIES[category]?.length ? CATEGORIES[category] : [''];
-}
-
 function createRule(
   category: string,
   subCategory: string,
@@ -120,9 +175,9 @@ function createRule(
   priority: keyof typeof PRIORITY_SLA = 'Medium'
 ): RoutingRuleSetting {
   return {
-    id: slug(`${category}-${subCategory || 'all'}-${location || 'all'}-${owners.join('-')}`),
+    id: routingRuleId(category, location, subCategory),
     category,
-    subCategory,
+    subCategory: subCategory || '',
     location,
     owner: owners[0],
     owners,
@@ -143,13 +198,9 @@ export function physique57RoutingPresets(): RoutingRuleSetting[] {
     department: string,
     escalation: string,
     priority: keyof typeof PRIORITY_SLA = 'Medium',
-    subCategoryFilter?: (subCategory: string) => boolean
   ) => {
     for (const category of categories) {
-      for (const subCategory of categorySubcategories(category)) {
-        if (subCategoryFilter && !subCategoryFilter(subCategory)) continue;
-        rules.push(createRule(category, subCategory, location, owners, department, escalation, priority));
-      }
+      rules.push(createRule(category, '', location, owners, department, escalation, priority));
     }
   };
 
@@ -165,8 +216,8 @@ export function physique57RoutingPresets(): RoutingRuleSetting[] {
   add(ACCOUNTS_CATEGORIES, 'Mumbai', ROUTING_PRESET_GROUPS.mumbaiAccounts, 'Accounts', 'Sachin Nalawade', 'High');
   add(ACCOUNTS_CATEGORIES, 'Bengaluru', ROUTING_PRESET_GROUPS.bengaluruAccounts, 'Accounts', 'Sachin Nalawade', 'High');
   add(BRAND_CATEGORIES, '', ROUTING_PRESET_GROUPS.brand, 'Management', 'Mitali Kumar');
-  add(['Brand Feedback', 'Hosted Class & Partnerships'], '', ROUTING_PRESET_GROUPS.social, 'Marketing', 'Reyna', 'Medium', (subCategory) => /social|content|instagram|amplification/i.test(subCategory));
-  return rules;
+  add(['Hosted Class & Partnerships'], '', ROUTING_PRESET_GROUPS.social, 'Marketing', 'Reyna');
+  return mergeRoutingRules(rules);
 }
 
 export function defaultRoutingSettings(): RoutingSettings {
@@ -195,33 +246,101 @@ export function defaultRoutingSettings(): RoutingSettings {
     id: slug(name),
     name,
     city: /bengaluru|bangalore|copper/i.test(name) ? 'Bengaluru' : 'Mumbai',
+    color: locationColor(slug(name), name),
+    capacity: DEFAULT_LOCATION_CAPACITY,
+    avgFillRate: 0,
+    sortOrder: 0,
     active: true,
   }));
 
   const routingRules = [
     ...physique57RoutingPresets(),
-    ...Object.entries(CATEGORIES).flatMap(([category, subCategories]) => {
-    const owner = ASSIGNMENT_RULES[category] || resolveTicketAssignee(category);
-    const employee = getEmployee(owner);
-    const department = employee?.team || resolveTicketDepartment(category, owner);
-    const escalation = getEscalationTarget(owner);
-    const priority = category.includes('Safety') || category.includes('Billing') ? 'High' : 'Medium';
-    return (subCategories.length ? subCategories : ['Other']).map((subCategory) => ({
-      id: slug(`${category}-${subCategory}`),
-      category,
-      subCategory,
-      location: '',
-      owner,
-      owners: [owner],
-      department,
-      escalation,
-      priority: priority as keyof typeof PRIORITY_SLA,
-      slaHours: PRIORITY_SLA[priority].hours,
+    ...Object.keys(CATEGORIES).flatMap((category) => {
+      const owner = ASSIGNMENT_RULES[category] || resolveTicketAssignee(category);
+      const employee = getEmployee(owner);
+      const department = employee?.team || resolveTicketDepartment(category, owner);
+      const escalation = getEscalationTarget(owner);
+      const priority = category.includes('Safety') || category.includes('Billing') ? 'High' : 'Medium';
+      return [{
+        id: routingRuleId(category),
+        category,
+        subCategory: '',
+        location: '',
+        owner,
+        owners: [owner],
+        department,
+        escalation,
+        priority: priority as keyof typeof PRIORITY_SLA,
+        slaHours: PRIORITY_SLA[priority].hours,
+        active: true,
+      }];
+    })];
+
+  return { departments, employees, locations, routingRules: mergeRoutingRules(routingRules) };
+}
+
+export interface CategoryCityRoutingInput {
+  category: string;
+  department: string;
+  escalation: string;
+  priority?: keyof typeof PRIORITY_SLA;
+  slaHours?: number;
+  cityRouting: Array<{
+    city: string;
+    owners: string[];
+  }>;
+}
+
+function cityLocations(settings: RoutingSettings, city: string): string[] {
+  const normalizedCity = inferRoutingCity(city) || city;
+  const fromSettings = settings.locations
+    .filter((location) => location.active !== false)
+    .filter((location) => (
+      inferRoutingCity(location.city) === normalizedCity ||
+      inferRoutingCity(location.name) === normalizedCity
+    ))
+    .map((location) => location.name);
+
+  const fromMaster = STUDIOS.filter((studio) => inferRoutingCity(studio) === normalizedCity);
+  return unique([...fromSettings, ...fromMaster]);
+}
+
+export function applyCategoryCityRouting(
+  settings: RoutingSettings,
+  input: CategoryCityRoutingInput
+): RoutingSettings {
+  const priority = input.priority || 'Medium';
+  const slaHours = input.slaHours || PRIORITY_SLA[priority].hours;
+  const replacements: RoutingRuleSetting[] = input.cityRouting.flatMap((item) => {
+    const owners = unique(item.owners);
+    if (!owners.length) return [];
+    const locations = cityLocations(settings, item.city);
+    const targetLocations = locations.length ? locations : [item.city];
+    return targetLocations.map((location) => ({
+      id: routingRuleId(input.category, location),
+      category: input.category,
+      subCategory: '',
+      location,
+      owner: owners[0],
+      owners,
+      department: input.department,
+      escalation: input.escalation,
+      priority,
+      slaHours,
       active: true,
     }));
-  })];
+  });
 
-  return { departments, employees, locations, routingRules };
+  const replacementLocations = new Set(replacements.map((rule) => rule.location || ''));
+  const routingRules = [
+    ...settings.routingRules.filter((rule) => (
+      rule.category !== input.category ||
+      !replacementLocations.has(rule.location || '')
+    )),
+    ...replacements,
+  ];
+
+  return { ...settings, routingRules };
 }
 
 function normalizeSettings(input: Partial<RoutingSettings> | null | undefined): RoutingSettings {
@@ -235,10 +354,10 @@ function normalizeSettings(input: Partial<RoutingSettings> | null | undefined): 
     departments: input?.departments?.length ? input.departments : defaults.departments,
     employees: withSupplementalEmployees,
     locations: input?.locations?.length ? input.locations : defaults.locations,
-    routingRules: (input?.routingRules?.length ? input.routingRules : defaults.routingRules).map((rule) => ({
+    routingRules: mergeRoutingRules((input?.routingRules?.length ? input.routingRules : defaults.routingRules).map((rule) => ({
       ...rule,
       owners: rule.owners?.length ? rule.owners : rule.owner ? [rule.owner] : [],
-    })),
+    }))),
   };
 }
 
@@ -279,11 +398,18 @@ function mapEmployee(row: Record<string, unknown>): EmployeeSetting {
 }
 
 function mapLocation(row: Record<string, unknown>): LocationSetting {
+  const id = String(row.id || slug(String(row.name || 'location')));
+  const name = String(row.name || row.short_name || '');
+  const city = typeof row.city === 'string' ? row.city : '';
   return {
-    id: String(row.id || slug(String(row.name || 'location'))),
-    name: String(row.name || ''),
-    city: typeof row.city === 'string' ? row.city : '',
-    active: row.active !== false,
+    id,
+    name,
+    city,
+    color: typeof row.color === 'string' ? row.color : locationColor(id, name, city),
+    capacity: Math.max(DEFAULT_LOCATION_CAPACITY, typeof row.capacity === 'number' ? row.capacity : Number(row.capacity || DEFAULT_LOCATION_CAPACITY)),
+    avgFillRate: typeof row.avg_fill_rate === 'number' ? row.avg_fill_rate : Number(row.avg_fill_rate || 0),
+    sortOrder: typeof row.sort_order === 'number' ? row.sort_order : Number(row.sort_order || 0),
+    active: row.active !== false && row.is_active !== false,
   };
 }
 
@@ -337,16 +463,33 @@ async function upsertRows(table: string, rows: Record<string, unknown>[]) {
   if (error) throw error;
 }
 
+async function syncRows(table: string, rows: Record<string, unknown>[], deleteStale = false) {
+  await upsertRows(table, rows);
+  if (!deleteStale) return;
+
+  const keepIds = new Set(rows.map((row) => String(row.id)));
+  const { data, error } = await backendSupabase.from(table).select('id');
+  if (error) throw error;
+
+  const staleIds = ((data || []) as Array<{ id?: string }>)
+    .map((row) => row.id)
+    .filter((id): id is string => Boolean(id && !keepIds.has(id)));
+
+  if (staleIds.length) {
+    const { error: deleteError } = await backendSupabase.from(table).delete().in('id', staleIds);
+    if (deleteError) throw deleteError;
+  }
+}
+
 export async function saveRoutingSettings(settings: RoutingSettings): Promise<void> {
-  saveLocalRoutingSettings(settings);
   await Promise.all([
-    upsertRows('departments', settings.departments.map((item) => ({
+    syncRows('departments', settings.departments.map((item) => ({
       id: item.id || slug(item.name),
       name: item.name,
       description: item.description || null,
       active: item.active,
     }))),
-    upsertRows('employees', settings.employees.map((item) => ({
+    syncRows('employees', settings.employees.map((item) => ({
       id: item.id || slug(item.email || item.name),
       name: item.name,
       email: item.email || null,
@@ -356,14 +499,19 @@ export async function saveRoutingSettings(settings: RoutingSettings): Promise<vo
       manager: item.manager || null,
       active: item.active,
     }))),
-    upsertRows('locations', settings.locations.map((item) => ({
+    syncRows('locations', settings.locations.map((item) => ({
       id: item.id || slug(item.name),
       name: item.name,
+      short_name: item.name,
       city: item.city || null,
+      color: item.color || locationColor(item.id || slug(item.name), item.name, item.city),
+      capacity: Math.max(DEFAULT_LOCATION_CAPACITY, item.capacity ?? DEFAULT_LOCATION_CAPACITY),
+      avg_fill_rate: item.avgFillRate ?? 0,
       active: item.active,
+      is_active: item.active,
     }))),
-    upsertRows('issue_routing_rules', settings.routingRules.map((item) => ({
-      id: item.id || slug(`${item.category}-${item.subCategory || 'any'}-${item.location || 'all'}`),
+    syncRows('issue_routing_rules', settings.routingRules.map((item) => ({
+      id: item.id || routingRuleId(item.category, item.location || '', item.subCategory || ''),
       category: item.category,
       sub_category: item.subCategory || null,
       location: item.location || null,
@@ -374,8 +522,9 @@ export async function saveRoutingSettings(settings: RoutingSettings): Promise<vo
       priority: item.priority,
       sla_hours: item.slaHours,
       active: item.active,
-    }))),
+    })), true),
   ]);
+  saveLocalRoutingSettings(settings);
 }
 
 function specificity(rule: RoutingRuleSetting, category: string, subCategory?: string, studio?: string): number {
@@ -386,8 +535,18 @@ function specificity(rule: RoutingRuleSetting, category: string, subCategory?: s
     score += 8;
   }
   if (rule.location) {
-    if (!studio || !studio.toLowerCase().includes(rule.location.toLowerCase())) return -1;
-    score += 4;
+    const ruleLocation = rule.location.toLowerCase();
+    const studioLocation = String(studio || '').toLowerCase();
+    const ruleCity = inferRoutingCity(rule.location);
+    const exactLocationMatch = Boolean(studioLocation && studioLocation.includes(ruleLocation));
+    const cityLocationMatch = Boolean(
+      studioLocation &&
+      ruleCity &&
+      ruleCity === inferRoutingCity(studio)
+    );
+    if (!exactLocationMatch && !cityLocationMatch) return -1;
+    const cityOnlyRule = Boolean(ruleCity && ruleLocation === ruleCity.toLowerCase());
+    score += exactLocationMatch && !cityOnlyRule ? 6 : 4;
   }
   return score;
 }
