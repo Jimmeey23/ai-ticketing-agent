@@ -33,6 +33,7 @@ export interface IntakeContext {
   attendeeCount?: string;
   prospectQuality?: string;
   followUpPreference?: string;
+  initialReport?: string;
   [key: string]: string | undefined;
 }
 
@@ -40,7 +41,7 @@ const PLACEHOLDER_VALUE_PATTERN = /unspecified|not specified|member-reported iss
 
 const INTAKE_ROUTES = ['Request', 'Complaint', 'Feedback', 'Internal Reporting'];
 
-const PHYSICAL_STUDIO_CATEGORIES = new Set([
+const STUDIO_REQUIRED_CATEGORIES = new Set([
   'Scheduling',
   'Class Experience',
   'Trainer Feedback',
@@ -54,6 +55,157 @@ const PHYSICAL_STUDIO_CATEGORIES = new Set([
   'Facility & Equipment',
   'Front Desk & Service',
 ]);
+
+export const PROTECTED_ENTITY_FIELD_IDS = [
+  'memberName',
+  'memberContact',
+  'memberId',
+  'classType',
+  'classDateTime',
+  'trainer',
+  'sessionId',
+  'membership',
+] as const;
+
+export type ProtectedEntityFieldId = typeof PROTECTED_ENTITY_FIELD_IDS[number];
+
+export const PROTECTED_ENTITY_FIELD_SET = new Set<string>(PROTECTED_ENTITY_FIELD_IDS);
+
+// Categories that are strictly facility/ops. A specific member/class is only relevant
+// when explicitly requested by a non-physical profile.
+const PHYSICAL_ONLY_CATEGORIES = new Set([
+  'Repair and Maintenance',
+  'Studio Amenities and Facilities',
+  'Facility & Equipment',
+  'Operating Systems',
+  'Tech Issues',
+  'App & Digital',
+]);
+
+type IntakeFieldType = 'select' | 'text' | 'textarea' | 'date' | 'datetime-local' | 'number';
+
+export interface IntakeFieldDefinition {
+  id: string;
+  label: string;
+  type: IntakeFieldType;
+  required?: boolean;
+  options?: string[];
+  dependsOn?: string;
+}
+
+const FIELD_DEFINITIONS: Record<string, IntakeFieldDefinition> = {
+  intakeRoute: { id: 'intakeRoute', label: 'Intake Route', type: 'select', required: true, options: INTAKE_ROUTES },
+  category: { id: 'category', label: 'Member Voice Category', type: 'select', required: true },
+  subCategory: { id: 'subCategory', label: 'Specific Touchpoint', type: 'select', required: true, dependsOn: 'category' },
+  studio: { id: 'studio', label: 'Studio Space', type: 'select', required: true },
+  incidentDateTime: { id: 'incidentDateTime', label: 'When was this first noticed?', type: 'datetime-local', required: true },
+  reportedBy: { id: 'reportedBy', label: 'Documented By', type: 'text', required: true },
+  priority: { id: 'priority', label: 'Priority', type: 'select', required: true, options: ['Critical', 'High', 'Medium', 'Low'] },
+  description: { id: 'description', label: 'Member stated feedback or operational summary', type: 'textarea', required: true },
+  memberName: { id: 'memberName', label: 'Community Member', type: 'text', required: true },
+  memberContact: { id: 'memberContact', label: 'Member Contact', type: 'text' },
+  classType: { id: 'classType', label: 'Momence Class / Session', type: 'select', required: true },
+  trainer: { id: 'trainer', label: 'Studio Instructor', type: 'select' },
+  membership: { id: 'membership', label: 'Active Package / Membership', type: 'select', required: true },
+  desiredResolution: { id: 'desiredResolution', label: "Member's requested resolution", type: 'textarea' },
+  memberSentiment: { id: 'memberSentiment', label: 'Member Sentiment', type: 'select' },
+  freezeStartDate: { id: 'freezeStartDate', label: 'Requested Freeze Start Date', type: 'date', required: true },
+  freezeEndDate: { id: 'freezeEndDate', label: 'Requested Freeze End Date', type: 'date', required: true },
+  freezeReason: { id: 'freezeReason', label: 'Freeze Reason Stated by Member', type: 'select', required: true },
+  classesRemaining: { id: 'classesRemaining', label: 'Classes / Credits Remaining', type: 'number' },
+  packageExpiryDate: { id: 'packageExpiryDate', label: 'Current Package Expiry Date', type: 'date' },
+  requestedRolloverDate: { id: 'requestedRolloverDate', label: 'Requested Roll Over / Extension Date', type: 'date', required: true },
+  rolloverReason: { id: 'rolloverReason', label: 'Roll Over Reason', type: 'select', required: true },
+  partnerName: { id: 'partnerName', label: 'Hosted Class Partner / Influencer', type: 'text', required: true },
+  hostedFeedbackArea: { id: 'hostedFeedbackArea', label: 'Hosted Class Feedback Area', type: 'select', required: true },
+  prospectQuality: { id: 'prospectQuality', label: 'Prospect Quality / Conversion Signal', type: 'select' },
+  followUpPreference: { id: 'followUpPreference', label: 'Follow-up Preference Indicated', type: 'select' },
+  machineSymptom: {
+    id: 'machineSymptom',
+    label: 'Machine symptom observed',
+    type: 'select',
+    required: true,
+    options: ['Will not turn on', 'Not draining', 'Not spinning', 'Leaking water', 'Electrical issue', 'Excess noise or vibration', 'Other / unsure'],
+  },
+  hvacSymptom: {
+    id: 'hvacSymptom',
+    label: 'HVAC issue observed',
+    type: 'select',
+    required: true,
+    options: ['Not cooling', 'Not heating', 'No airflow', 'Water leakage', 'Noise / vibration', 'Remote or control issue', 'Other / unsure'],
+  },
+  lockFaultType: {
+    id: 'lockFaultType',
+    label: 'Door or lock fault type',
+    type: 'select',
+    required: true,
+    options: ['Will not close', 'Will not open', 'Latch not catching', 'Key/card access failing', 'Handle loose or broken', 'Hinge issue', 'Other / unsure'],
+  },
+  accessStatus: {
+    id: 'accessStatus',
+    label: 'Current access status',
+    type: 'select',
+    required: true,
+    options: ['Access open and usable', 'Access restricted but workaround available', 'Area cannot be secured', 'Area cannot be accessed', 'Unknown'],
+  },
+  securityRisk: {
+    id: 'securityRisk',
+    label: 'Security or safety risk',
+    type: 'select',
+    required: true,
+    options: ['No immediate risk', 'Member/staff safety risk', 'Area cannot be secured overnight', 'Fire/access compliance risk', 'Unknown'],
+  },
+  plumbingSymptom: {
+    id: 'plumbingSymptom',
+    label: 'Plumbing symptom observed',
+    type: 'select',
+    required: true,
+    options: ['Leak', 'Drain clogged', 'Overflow', 'No water', 'Low pressure', 'Flush issue', 'Odour/sewage concern', 'Other / unsure'],
+  },
+  electricalSymptom: {
+    id: 'electricalSymptom',
+    label: 'Electrical or lighting symptom',
+    type: 'select',
+    required: true,
+    options: ['Light not working', 'Flickering light', 'Socket not working', 'Exposed/loose wiring', 'Trip or power loss', 'Other / unsure'],
+  },
+  affectedArea: { id: 'affectedArea', label: 'Affected area inside the studio space', type: 'text', required: true },
+  operationalImpact: {
+    id: 'operationalImpact',
+    label: 'Operational impact right now',
+    type: 'textarea',
+    required: true,
+  },
+  currentWorkaround: {
+    id: 'currentWorkaround',
+    label: 'Temporary workaround currently in place',
+    type: 'textarea',
+    required: true,
+  },
+  resolutionRequirement: {
+    id: 'resolutionRequirement',
+    label: 'Expected resolution or vendor action needed',
+    type: 'textarea',
+    required: true,
+  },
+  appIssueSurface: {
+    id: 'appIssueSurface',
+    label: 'Digital surface affected',
+    type: 'select',
+    required: true,
+    options: ['Momence app', 'Website', 'Payment gateway', 'iPad / check-in device', 'Wi-Fi / router', 'Other digital system'],
+  },
+  appErrorObserved: { id: 'appErrorObserved', label: 'Error message or behavior observed', type: 'textarea', required: true },
+  deviceContext: { id: 'deviceContext', label: 'Device, browser, app version, or account context', type: 'text' },
+};
+
+export function getIntakeFieldDefinition(id: string): IntakeFieldDefinition | undefined {
+  return FIELD_DEFINITIONS[id];
+}
+
+export function isProtectedEntityField(id: string): boolean {
+  return PROTECTED_ENTITY_FIELD_SET.has(id);
+}
 
 const MEMBER_FACING_CATEGORIES = new Set([
   'Scheduling',
@@ -96,6 +248,56 @@ export function isMissingIntakeValue(value: unknown): boolean {
   return !normalized || PLACEHOLDER_VALUE_PATTERN.test(normalized);
 }
 
+// Physical/facility issues that require detailed operational context before the description
+// is considered complete. Short initial reports for these are captured as preliminary only.
+const HVAC_TEXT_PATTERN = /\b(?:ac|hvac)\b|air\s?con|air conditioning|not cooling|not heating|no airflow/i;
+const PHYSICAL_ISSUE_TEXT_PATTERN = /repair|maintenance|broken|not working|not closing|not opening|stopped working|won't close|won't open|not cooling|not heating|too hot|too cold|very hot|very cold|temperature|malfunction|faulty|damaged|leak|leaking|plumbing|drain|clog|flush|sewage|socket|electrical|bulb|fused|flickering|machine|washing|dryer|pump|pest|mold|damp|\bdoor\b|\block\b|\bhandle\b|hinge|ceiling|crack|odour|odor|smell|stench|ventilation|locker|shower|washroom|toilet|steam|\bac\b|hvac|air\s?con|app crash|login issue|website down/i;
+
+function buildIssueText(context: IntakeContext, extraText = ''): string {
+  return [
+    extraText,
+    context.initialReport,
+    context.requestType,
+    context.category,
+    context.subCategory,
+    context.description,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function getIssueProfileFieldIds(context: IntakeContext): string[] {
+  const issueText = buildIssueText(context);
+  const category = context.category || '';
+  const subCategory = context.subCategory || '';
+
+  if (!PHYSICAL_ONLY_CATEGORIES.has(category)) return [];
+
+  if (/washing|washer|laundry|dryer|machine/.test(issueText) || subCategory === 'Broken Equipment Not Repaired') {
+    return ['machineSymptom', 'operationalImpact', 'currentWorkaround', 'resolutionRequirement'];
+  }
+
+  if (/door|lock|latch|handle|hinge|access|closing|opening/.test(issueText) || subCategory === 'Door Lock Issues') {
+    return ['lockFaultType', 'accessStatus', 'securityRisk', 'resolutionRequirement'];
+  }
+
+  if (HVAC_TEXT_PATTERN.test(issueText) || subCategory === 'AC and HVAC Issues') {
+    return ['hvacSymptom', 'affectedArea', 'operationalImpact', 'currentWorkaround', 'resolutionRequirement'];
+  }
+
+  if (/plumbing|leak|drain|clog|flush|sewage|overflow|pipe|water/.test(issueText) || subCategory === 'Plumbing Leaks') {
+    return ['plumbingSymptom', 'affectedArea', 'operationalImpact', 'currentWorkaround', 'resolutionRequirement'];
+  }
+
+  if (/light|lighting|bulb|fused|flickering|electrical|socket|wiring|power|trip/.test(issueText) || subCategory === 'Lighting Issues') {
+    return ['electricalSymptom', 'affectedArea', 'operationalImpact', 'currentWorkaround', 'resolutionRequirement'];
+  }
+
+  if (/app|website|login|password|payment gateway|momence|sync|qr|ipad|wi-?fi|wifi|router/.test(issueText) || category === 'App & Digital' || category === 'Tech Issues') {
+    return ['appIssueSurface', 'appErrorObserved', 'deviceContext', 'operationalImpact', 'currentWorkaround'];
+  }
+
+  return [];
+}
+
 export function captureMemberVoiceFromText(text: string, context: IntakeContext): string | null {
   const value = text.trim();
 
@@ -117,9 +319,18 @@ export function captureMemberVoiceFromText(text: string, context: IntakeContext)
     return null;
   }
 
+  // For physical/maintenance/facility issues, a brief one-liner is a STARTING POINT, not a
+  // complete description. Require substantially more detail (multi-sentence or >100 chars)
+  // before treating it as the captured description so the AI is prompted to collect operational detail.
+  const isPhysicalIssueText = PHYSICAL_ISSUE_TEXT_PATTERN.test(value);
+  if (isPhysicalIssueText) {
+    const isDetailed = value.length > 100 || (/[.!?]\s/.test(value) && value.length > 60) || value.includes('\n');
+    if (!isDetailed) return null; // leave description empty — AI will collect proper operational detail
+  }
+
   const looksLikeMemberVoice =
-    value.length > 35 ||
-    /member|client|community|reported|said|stated|requested|complain|feedback|concern|issue|class|studio|refund|freeze|roll|trainer|instructor|billing|payment|booking|temperature|ac/i.test(value);
+    value.length > 15 ||
+    /member|client|community|reported|said|stated|requested|complain|feedback|concern|issue|class|studio|refund|freeze|roll|trainer|instructor|billing|payment|booking|temperature|\bac\b|hvac|air\s?con|broken|repair|maintenance|not working|malfunction|leak|clean|smell|odour|locker|washroom|shower/i.test(value);
 
   return looksLikeMemberVoice ? value : null;
 }
@@ -127,6 +338,7 @@ export function captureMemberVoiceFromText(text: string, context: IntakeContext)
 export function inferIntakeContextFromText(text: string, context: IntakeContext = {}): Partial<IntakeContext> {
   const lower = [
     text,
+    context.initialReport,
     context.requestType,
     context.category,
     context.subCategory,
@@ -161,12 +373,45 @@ export function inferIntakeContextFromText(text: string, context: IntakeContext 
     } else if (/injury|safety|medical|harassment|security|theft|stolen|missing cash|cash envelope|unsafe|faint|cramp|conflict/.test(lower)) {
       inferred.category = 'Safety and Security';
       inferred.subCategory = /theft|stolen|missing cash|cash envelope/.test(lower) ? 'Theft Prevention Measures' : /harass|conflict/.test(lower) ? 'Harassment Reports' : 'Personal Safety Concerns';
-    } else if (/equipment|ac|temperature|cold|hot|locker|clean|odour|odor|audio|lighting|washroom|shower|ventilation|air quality|boutique|retail/.test(lower)) {
+    } else if (
+      /repair|maintenance|broken|not working|not closing|not opening|stopped working|isn't working|isnt working|won't close|won't open|malfunction|faulty|damaged|damage|crack|cracked|leak|leaking|overflow|plumbing|drain|clog|clogged|flush|sewage|socket|electrical|wiring|bulb|fused|flickering|lights not|light not|machine|washing machine|dryer|washing|pump|generator|pest|pest control|mold|mould|damp|seepage|\bdoor\b|\block\b|latch|handle|hinge/.test(lower) ||
+      HVAC_TEXT_PATTERN.test(lower)
+    ) {
+      inferred.category = 'Repair and Maintenance';
+      inferred.subCategory = HVAC_TEXT_PATTERN.test(lower) ? 'AC and HVAC Issues'
+        : /light|bulb|fused|flickering/.test(lower) ? 'Lighting Issues'
+        : /audio|speaker|mic|sound/.test(lower) ? 'Audio System Malfunction'
+        : /leak|plumbing|drain|flush|sewage|overflow|clog|pipe/.test(lower) ? 'Plumbing Leaks'
+        : /pest|cockroach|rat|rodent|insect|ant/.test(lower) ? 'Pest Control Needed'
+        : /door|lock|handle|hinge/.test(lower) ? 'Door Lock Issues'
+        : /machine|washing|dryer|equipment|broken|not working|malfunction|faulty/.test(lower) ? 'Broken Equipment Not Repaired'
+        : 'General Maintenance Delays';
+    } else if (/odour|odor|smell|stench|ventilation|air quality|locker|shower|washroom|toilet|steam room|valet|parking|wi-fi|wifi|boutique|retail|amenity|amenities|cleanliness|hygiene|clean|dirty/.test(lower)) {
       inferred.category = 'Studio Amenities and Facilities';
-      inferred.subCategory = /temperature|ac|cold|hot|ventilation|air quality/.test(lower) ? 'Air Quality Poor' : /clean|hygiene/.test(lower) ? 'Cleanliness and Hygiene' : /locker/.test(lower) ? 'Locker Availability' : /boutique|retail/.test(lower) ? 'Boutique Availability Issues' : 'Studio Odour and Aroma';
+      inferred.subCategory = /temperature|too hot|too cold|cold|hot/.test(lower) ? 'Air Quality Poor'
+        : /ventilation|air quality/.test(lower) ? 'Ventilation Poor'
+        : /clean|hygiene|dirty/.test(lower) ? 'Cleanliness and Hygiene'
+        : /locker/.test(lower) ? 'Locker Availability'
+        : /boutique|retail/.test(lower) ? 'Boutique Availability Issues'
+        : /steam/.test(lower) ? 'Steam Room Not Working'
+        : 'Studio Odour and Aroma';
+    } else if (/temperature|too hot|too cold|air\s?con|air quality/.test(lower)) {
+      // Temperature/AC comfort complaint (not a breakdown) — map to amenities, not maintenance
+      inferred.category = 'Studio Amenities and Facilities';
+      inferred.subCategory = 'Air Quality Poor';
     } else if (/trainer|instructor|class|music|cue|correction|adjustment|intensity|overcrowded|capacity|late start|no-show|substitute|punctual|engagement/.test(lower)) {
       inferred.category = /trainer|instructor|correction|adjustment|punctual|engagement|no-show/.test(lower) ? 'Trainer Feedback' : 'Class Experience';
       inferred.subCategory = /overcrowd|capacity/.test(lower) ? 'Overcrowding in Class' : /audio|music|loud/.test(lower) ? 'Audio Issues' : /punctual|late|no-show/.test(lower) ? 'Trainer Punctuality Issues' : /intensity/.test(lower) ? 'Class Intensity Too High/Low' : 'Class Flow and Pacing';
+    } else if (/app crash|app not|app freezing|login issue|login error|password reset|push notification|booking confirmation missing|payment gateway|momence account|sync issue|profile issue|website glitch|website not|website down|qr code|ipad not|ipad issue/.test(lower)) {
+      inferred.category = 'App & Digital';
+      inferred.subCategory = /crash|freeze|not responding/.test(lower) ? 'App Crash'
+        : /login|password/.test(lower) ? 'Login Issue'
+        : /notification/.test(lower) ? 'Push Notifications'
+        : /payment|gateway/.test(lower) ? 'Payment Gateway Issue'
+        : /momence|sync/.test(lower) ? 'Momence Account Sync'
+        : /booking confirm/.test(lower) ? 'Booking Confirmation Missing'
+        : /website/.test(lower) ? 'Website Chat / Lead Form Issue'
+        : 'App Crash';
     } else if (/booking|schedule|class availability|late entry|waitlist|cancelled|reschedule|timing|variety/.test(lower)) {
       inferred.category = 'Scheduling';
       inferred.subCategory = /late entry/.test(lower) ? 'Late Arrival Policy' : /availability|variety/.test(lower) ? 'Additional Classes' : /cancel/.test(lower) ? 'Last-minute Cancellations' : 'Class Capacity Issues';
@@ -223,12 +468,7 @@ export function getMissingIntakeFields(context: IntakeContext): string[] {
   }
 
   const routeLower = route.toLowerCase();
-  const issueText = [
-    context.requestType,
-    category,
-    subCategory,
-    context.description,
-  ].filter(Boolean).join(' ').toLowerCase();
+  const issueText = buildIssueText(context);
   const categoryPathText = `${category} ${subCategory} ${issueText}`.toLowerCase();
   const membershipSpecific =
     /freeze|pause|roll|extension|membership|package|renewal|upgrade|downgrade|auto-renew|refund|expiry|credit|class pack|billing|payment/.test(issueText);
@@ -237,11 +477,26 @@ export function getMissingIntakeFields(context: IntakeContext): string[] {
     routeLower !== 'feedback' ||
     /safety|security|theft|repair|maintenance|tech|operating|pricing|membership|customer service|complaint|urgent|injury|hazard/.test(categoryPathText);
 
-  if (PHYSICAL_STUDIO_CATEGORIES.has(category) && /select studio|which studio|studio record|exact studio/.test(issueText)) {
+  // Always require studio for any physical in-studio category — no keyword guard
+  if (STUDIO_REQUIRED_CATEGORIES.has(category)) {
     add('studio', context.studio);
   }
 
-  if (routeLower !== 'internal reporting' && isSpecificMemberRequired(context, issueText, category) && (MEMBER_FACING_CATEGORIES.has(category) || membershipSpecific)) {
+  // For physical/maintenance/amenity issues: always require when it was first noticed.
+  // The AI determines all other contextual fields dynamically from the incident description.
+  const isPhysicalCategory = PHYSICAL_ONLY_CATEGORIES.has(category);
+  if (isPhysicalCategory) {
+    add('incidentDateTime', context.incidentDateTime);
+    getIssueProfileFieldIds(context).forEach((field) => add(field, context[field]));
+  }
+
+  if (
+    routeLower !== 'internal reporting' &&
+    isSpecificMemberRequired(context, issueText, category) &&
+    (MEMBER_FACING_CATEGORIES.has(category) || membershipSpecific) &&
+    // Never ask for a member for pure facility/maintenance/ops/tech issues
+    !PHYSICAL_ONLY_CATEGORIES.has(category)
+  ) {
     add('memberName', context.memberId || context.memberName);
   }
 
@@ -285,11 +540,27 @@ export function getMissingIntakeFields(context: IntakeContext): string[] {
 
   add('reportedBy', context.reportedBy);
   if (prioritySpecific) add('priority', context.priority);
-  add('description', context.description);
+  // For physical/maintenance/facility categories the AI uses custom field IDs to capture
+  // operational detail — not the generic 'description' field. Don't require description
+  // for those categories; let the AI reason about what specific questions to ask.
+  if (!isPhysicalCategory) {
+    add('description', context.description);
+  }
 
   return fields;
 }
 
 export function isIntakePublishable(context: IntakeContext): boolean {
   return getMissingIntakeFields(context).length === 0;
+}
+
+export function getIntakeFieldDefinitions(context: IntakeContext): IntakeFieldDefinition[] {
+  return getMissingIntakeFields(context).map((id) => (
+    FIELD_DEFINITIONS[id] || {
+      id,
+      label: id.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').replace(/^./, (value) => value.toUpperCase()),
+      type: 'text',
+      required: true,
+    }
+  ));
 }

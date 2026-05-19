@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { ASSOCIATES, getEmployee, getEscalationTarget, isTicketBreached, PRIORITY_SLA, resolveTicketAssignee, resolveTicketDepartment, Ticket, TicketMetadata, TicketResolutionDetail } from '@/lib/ticketing-data';
 import { backendSupabase } from '@/lib/backend-supabase';
 import { useBackendAuth } from '@/contexts/BackendAuthContext';
@@ -12,85 +12,24 @@ import {
   notificationDismissalStorageKey as buildNotificationDismissalStorageKey,
   saveDismissedNotificationIds,
 } from '@/lib/notification-dismissals';
+import {
+  isTicketDueToday,
+  sendTicketLifecycleEmail,
+  ticketEmailInFlightKey,
+  TicketEmailEventType,
+} from '@/lib/ticket-email-notifications';
+import {
+  ApprovedTicketDraft,
+  ManualTicketInput,
+  TicketContext,
+  TicketNotification,
+  TicketStatusUpdateInput,
+} from './ticket-context-core';
 
-export interface TicketNotification {
-  id: string;
-  ticketId: string;
-  title: string;
-  message: string;
-  level: 'critical' | 'warning';
-  ticket: Ticket;
-  owner: string;
-  createdAt: string;
-}
+export type { ManualTicketInput, TicketStatusUpdateInput } from './ticket-context-core';
 
-interface TicketContextValue {
-  tickets: Ticket[];
-  notifications: TicketNotification[];
-  loading: boolean;
-  error: string | null;
-  updateTicket: (id: string, patch: Partial<Ticket>, actor?: string) => Promise<void>;
-  updateTicketStatus: (id: string, detail: TicketStatusUpdateInput, actor?: string) => Promise<void>;
-  canUpdateTicketStatus: (ticket: Ticket) => boolean;
-  clearAllNotifications: () => void;
-  createApprovedTicket: (draft: DraftTicket, conversationId?: string | null, context?: Record<string, unknown>, attachments?: File[]) => Promise<Ticket>;
-  createManualTicket: (draft: ManualTicketInput) => Promise<Ticket>;
-  deleteTicket: (id: string) => Promise<void>;
-  selectedTicket: Ticket | null;
-  setSelectedTicket: (t: Ticket | null) => void;
-  refresh: () => Promise<void>;
-}
-
-export interface TicketStatusUpdateInput {
-  status: Ticket['status'];
-  reason: string;
-  actionTaken: string;
-  actionDate: string;
-  followUpDate?: string;
-  comments?: string;
-  notes?: string;
-}
-
-interface DraftTicket {
-  title: string;
-  description: string;
-  category: string;
-  subCategory: string;
-  priority: Ticket['priority'];
-  studio: string;
-  trainer?: string | null;
-  classType?: string | null;
-  classDateTime?: string | null;
-  memberName?: string | null;
-  memberContact?: string | null;
-  reportedBy?: string | null;
-  assignedTo?: string | null;
-  department?: string | null;
-  tags: string[];
-  sentiment?: string;
-  conversationSummary?: string;
-}
-
-export interface ManualTicketInput {
-  title: string;
-  description: string;
-  category: string;
-  subCategory: string;
-  priority: Ticket['priority'];
-  studio: string;
-  trainer?: string | null;
-  classType?: string | null;
-  classDateTime?: string | null;
-  memberName?: string | null;
-  memberContact?: string | null;
-  assignedTo?: string | null;
-  tags?: string[];
-  sentiment?: string;
-}
-
-const TicketContext = createContext<TicketContextValue | null>(null);
-const LEGACY_SLA_DISABLE_MARKER_KEY = 'athena-legacy-sla-disabled-v1';
-const LEGACY_SLA_FREEZE_AT = '2100-01-01T00:00:00.000Z';
+type DraftTicket = ApprovedTicketDraft;
+const EMAIL_ROLLOUT_CUTOFF_AT = new Date('2026-05-20T00:05:03+05:30').getTime();
 
 interface HistoricTicketRow {
   ticket_id: string;
@@ -199,11 +138,8 @@ function removeUnsupportedTicketColumn(row: DbTicketPatch, column: string): DbTi
   return next;
 }
 
-function normalizeHistoricStatus(status: string): Ticket['status'] {
-  const normalized = status?.toLowerCase();
-  if (normalized === 'resolved') return 'Resolved';
-  if (normalized === 'awaiting_customer_response') return 'Awaiting Member';
-  return 'In Progress';
+function normalizeHistoricStatus(_status: string): Ticket['status'] {
+  return 'Closed';
 }
 
 function normalizePriority(priority: string): Ticket['priority'] {
@@ -291,6 +227,8 @@ function mapHistoricTicket(row: HistoricTicketRow): Ticket {
 function fromRow(row: DbTicketRow): Ticket {
   const assignedTo = normalizeTicketOwner(row.category, row.studio, row.assigned_to);
   const team = normalizeTicketTeam(row.category, assignedTo);
+  const createdAtMs = new Date(row.created_at).getTime();
+  const existedBeforeEmailRollout = Number.isFinite(createdAtMs) && createdAtMs < EMAIL_ROLLOUT_CUTOFF_AT;
 
   return {
     id: row.id,
@@ -299,7 +237,7 @@ function fromRow(row: DbTicketRow): Ticket {
     category: row.category,
     subCategory: row.sub_category,
     priority: row.priority,
-    status: row.status,
+    status: existedBeforeEmailRollout ? 'Closed' : row.status,
     studio: row.studio,
     trainer: row.trainer || undefined,
     classType: row.class_type || undefined,
@@ -309,7 +247,9 @@ function fromRow(row: DbTicketRow): Ticket {
     reportedBy: row.reported_by || undefined,
     assignedTo,
     team,
-    tags: row.tags || [],
+    tags: existedBeforeEmailRollout
+      ? Array.from(new Set([...(row.tags || []), 'closed-before-email-rollout']))
+      : row.tags || [],
     sentiment: row.sentiment || undefined,
     conversationSummary: row.conversation_summary || undefined,
     createdAt: row.created_at,
@@ -377,67 +317,6 @@ function formatTicketBody(value: string): string {
   }).join('\n');
 }
 
-function extractCreatedTicket(data: unknown, depth = 0): DbTicketRow | Ticket | null {
-  if (!data || depth > 5) return null;
-
-  if (typeof data === 'string') {
-    try {
-      return extractCreatedTicket(JSON.parse(data), depth + 1);
-    } catch {
-      return null;
-    }
-  }
-
-  if (Array.isArray(data)) {
-    for (const item of data) {
-      const found = extractCreatedTicket(item, depth + 1);
-      if (found) return found;
-    }
-    return null;
-  }
-
-  if (typeof data !== 'object') return null;
-  const value = data as Record<string, unknown>;
-  if ('id' in value && ('title' in value || 'description' in value)) return value as unknown as DbTicketRow | Ticket;
-
-  for (const key of ['createdTicket', 'created_ticket', 'ticket', 'data', 'record', 'inserted', 'result', 'body']) {
-    const found = extractCreatedTicket(value[key], depth + 1);
-    if (found) return found;
-  }
-
-  for (const candidate of Object.values(value)) {
-    const found = extractCreatedTicket(candidate, depth + 1);
-    if (found) return found;
-  }
-
-  return null;
-}
-
-function extractCreatedTicketId(data: unknown, depth = 0): string | null {
-  if (!data || depth > 5) return null;
-  if (typeof data === 'string') return /^[A-Za-z0-9_-]+$/.test(data) ? data : null;
-  if (Array.isArray(data)) {
-    for (const item of data) {
-      const found = extractCreatedTicketId(item, depth + 1);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof data !== 'object') return null;
-
-  const value = data as Record<string, unknown>;
-  for (const key of ['id', 'ticketId', 'ticket_id', 'createdTicketId', 'created_ticket_id']) {
-    if (typeof value[key] === 'string') return value[key] as string;
-    if (typeof value[key] === 'number') return String(value[key]);
-  }
-
-  for (const candidate of Object.values(value)) {
-    const found = extractCreatedTicketId(candidate, depth + 1);
-    if (found) return found;
-  }
-  return null;
-}
-
 // UI patch → DB patch (snake_case mapping)
 function toRowPatch(patch: Partial<Ticket>): DbTicketPatch {
   const map: Record<string, string> = {
@@ -475,10 +354,6 @@ function computeSlaDueAt(priority: Ticket['priority']): string {
   const dueAt = new Date();
   dueAt.setHours(dueAt.getHours() + hours);
   return dueAt.toISOString();
-}
-
-function resolveTeam(assignedTo: string, category: string): string {
-  return resolveTicketDepartment(category, assignedTo);
 }
 
 function sanitizeAttachmentFileName(fileName: string): string {
@@ -540,9 +415,9 @@ function buildSourceRef(draft: DraftTicket, context: Record<string, unknown> = {
 
 function toInsertRow(draft: DraftTicket, context: Record<string, unknown> = {}, assignment?: ResolvedAssignment): DbTicketPatch {
   const assignedTo = assignment?.assignedTo || resolveTicketAssignee(draft.category, draft.studio);
-  const team = assignment?.team || draft.department || resolveTeam(assignedTo, draft.category);
+  const team = assignment?.team || draft.department || resolveTicketDepartment(draft.category, assignedTo);
   const nextEscalation = assignment?.nextEscalation || getEscalationTarget(assignedTo);
-  const priority = assignment?.priority || draft.priority;
+  const priority = (assignment?.priority || draft.priority) as Ticket['priority'];
   const slaDueAt = assignment?.slaHours
     ? new Date(Date.now() + assignment.slaHours * 60 * 60 * 1000).toISOString()
     : computeSlaDueAt(priority);
@@ -670,6 +545,7 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [error, setError] = useState<string | null>(null);
   const [selectedTicket, setSelectedTicketState] = useState<Ticket | null>(null);
   const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(() => new Set());
+  const emailNotificationInFlightRef = useRef<Set<string>>(new Set());
   const notificationDismissalStorage = useMemo(() => (
     typeof window === 'undefined' ? undefined : window.localStorage
   ), []);
@@ -774,7 +650,7 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const now = Date.now();
     return tickets
       .filter((ticket) => ownsTicket(ticket))
-      .flatMap((ticket) => {
+      .flatMap((ticket): TicketNotification[] => {
         const dueAt = new Date(ticket.slaDueAt).getTime();
         if (Number.isNaN(dueAt)) return [];
 
@@ -841,6 +717,20 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, [generatedNotifications, notificationDismissalStorage, notificationDismissalStorageKey, user?.id]);
 
+  const notifyTicketEmail = useCallback((eventType: TicketEmailEventType, ticket: Ticket, actor?: string) => {
+    const key = ticketEmailInFlightKey(eventType, ticket);
+    if (emailNotificationInFlightRef.current.has(key)) return;
+    emailNotificationInFlightRef.current.add(key);
+
+    void sendTicketLifecycleEmail(eventType, ticket, actor)
+      .catch((emailError: unknown) => {
+        console.warn('Ticket lifecycle email failed:', getErrorMessage(emailError, 'Unknown email notification error'));
+      })
+      .finally(() => {
+        emailNotificationInFlightRef.current.delete(key);
+      });
+  }, []);
+
   const fetchHistoricTickets = useCallback(async () => {
     const response = await fetch('/tickets.json', { cache: 'no-store' });
     if (!response.ok) {
@@ -871,29 +761,6 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     ]);
     if (failures.length) setError(failures.join(' · '));
   }, [fetchHistoricTickets, fetchTickets]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (loading) return;
-    if (liveTickets.length === 0) return;
-    if (window.localStorage.getItem(LEGACY_SLA_DISABLE_MARKER_KEY)) return;
-
-    const ticketIds = liveTickets.map((ticket) => ticket.id).filter(Boolean);
-    if (ticketIds.length === 0) return;
-
-    backendSupabase
-      .from('tickets')
-      .update({ sla_due_at: LEGACY_SLA_FREEZE_AT })
-      .in('id', ticketIds)
-      .then(({ error: updateError }) => {
-        if (updateError) {
-          console.warn('Legacy SLA reset failed:', getErrorMessage(updateError, 'Unknown legacy SLA reset error'));
-          return;
-        }
-        window.localStorage.setItem(LEGACY_SLA_DISABLE_MARKER_KEY, new Date().toISOString());
-        void refresh();
-      });
-  }, [liveTickets, loading, refresh]);
 
   // Initial load
   useEffect(() => {
@@ -1000,9 +867,24 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             to_value: patch.priority,
           });
         }
+
+        const nextTicket: Ticket = { ...current, ...patch };
+        if (patch.status === 'Closed' && current.status !== 'Closed') {
+          notifyTicketEmail('ticket_closed', nextTicket, actor);
+        }
+        if (
+          patch.assignedTo &&
+          patch.assignedTo !== current.assignedTo &&
+          (nextTicket.tags.includes('escalated') || nextTicket.tags.includes('sla-breached'))
+        ) {
+          notifyTicketEmail('ticket_escalated', nextTicket, actor);
+        }
+        if (isTicketDueToday(nextTicket)) {
+          notifyTicketEmail('ticket_due_today', nextTicket, actor);
+        }
       }
     },
-    [canUpdateTicketStatus, refresh, tickets, user]
+    [canUpdateTicketStatus, notifyTicketEmail, refresh, tickets, user]
   );
 
   const updateTicketStatus = useCallback(
@@ -1039,14 +921,14 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ? {
             ...configuredAssignment,
             assignedTo,
-            team: resolveTeam(assignedTo, input.category),
+            team: resolveTicketDepartment(input.category, assignedTo),
             nextEscalation: getEscalationTarget(assignedTo),
           }
         : configuredAssignment;
-      const row = {
+      const row: DbTicketPatch = {
         ...toInsertRow(draft, { source: 'manual_ticket' }, assignment),
         assigned_to: assignedTo,
-        team: resolveTeam(assignedTo, input.category),
+        team: resolveTicketDepartment(input.category, assignedTo),
         created_by: authData.session?.user.id,
       };
       row.metadata = {
@@ -1054,12 +936,12 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         routing: {
           ...(((row.metadata as Record<string, unknown>)?.routing as Record<string, unknown>) || {}),
           assigned_to: assignedTo,
-          department: resolveTeam(assignedTo, input.category),
+          department: resolveTicketDepartment(input.category, assignedTo),
           next_escalation: getEscalationTarget(assignedTo),
         },
       };
 
-      let rowForInsert = row;
+      let rowForInsert: DbTicketPatch = row;
       let created: DbTicketRow | null = null;
       let createError: unknown = null;
 
@@ -1087,10 +969,12 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const ticket = normalizeCreatedTicket(created);
       setLiveTickets((prev) => dedupeAndSortTickets([ticket, ...prev]));
       setSelectedTicketState(ticket);
+      notifyTicketEmail('ticket_assigned', ticket, reporterName);
+      if (isTicketDueToday(ticket)) notifyTicketEmail('ticket_due_today', ticket, reporterName);
       await refresh();
       return ticket;
     },
-    [refresh]
+    [notifyTicketEmail, refresh]
   );
 
   const deleteTicket = useCallback(
@@ -1141,14 +1025,14 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ? {
             ...configuredAssignment,
             assignedTo: contextAssignedTo,
-            team: contextDepartment || resolveTeam(contextAssignedTo, publishDraft.category),
+            team: contextDepartment || resolveTicketDepartment(publishDraft.category, contextAssignedTo),
             nextEscalation: getEscalationTarget(contextAssignedTo),
           }
         : {
             ...configuredAssignment,
             team: contextDepartment || configuredAssignment.team,
           };
-      const insertRow = {
+      const insertRow: DbTicketPatch = {
         ...toInsertRow(
           {
             ...publishDraft,
@@ -1185,7 +1069,7 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       if (existing) return normalizeCreatedTicket(existing as DbTicketRow);
 
-      let rowForInsert = insertRow;
+      let rowForInsert: DbTicketPatch = insertRow;
       let created: DbTicketRow | null = null;
       let createError: unknown = null;
 
@@ -1257,11 +1141,20 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       }
 
+      const ticket = normalizeCreatedTicket(created as DbTicketRow | Ticket);
+      notifyTicketEmail('ticket_assigned', ticket, signedInReporter);
+      if (isTicketDueToday(ticket)) notifyTicketEmail('ticket_due_today', ticket, signedInReporter);
       await refresh();
-      return normalizeCreatedTicket(created as DbTicketRow | Ticket);
+      return ticket;
     },
-    [refresh]
+    [notifyTicketEmail, refresh]
   );
+
+  useEffect(() => {
+    for (const ticket of tickets) {
+      if (isTicketDueToday(ticket)) notifyTicketEmail('ticket_due_today', ticket, 'SLA Automation');
+    }
+  }, [notifyTicketEmail, tickets]);
 
   useEffect(() => {
     const breached = tickets.filter((ticket) => isTicketBreached(ticket));
@@ -1309,10 +1202,4 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       {children}
     </TicketContext.Provider>
   );
-};
-
-export const useTickets = () => {
-  const ctx = useContext(TicketContext);
-  if (!ctx) throw new Error('useTickets must be used within TicketProvider');
-  return ctx;
 };

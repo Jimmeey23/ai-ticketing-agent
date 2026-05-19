@@ -898,10 +898,9 @@ export function paginateReportRows<T>(rows: T[], page: number, pageSize: number)
   };
 }
 
-function safeRecordArray<T extends Record<string, unknown>>(value: unknown): T[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is T => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
-    : [];
+function safeRecordArray<T>(value: unknown): T[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) as T[];
 }
 
 function safeStringArray(value: unknown, limit = 12): string[] {

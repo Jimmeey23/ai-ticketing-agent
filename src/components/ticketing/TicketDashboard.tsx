@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { ManualTicketInput, useTickets } from './TicketContext';
+import { ManualTicketInput } from './TicketContext';
+import { useTickets } from './useTickets';
 import { TicketCard } from './TicketCard';
 import {
   ASSOCIATES,

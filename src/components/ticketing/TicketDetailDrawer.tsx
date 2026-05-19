@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Ticket, PRIORITY_SLA, STATUSES, ASSOCIATES, CATEGORIES, STUDIOS, CLASS_TYPES, TRAINERS, getEscalationTarget } from '@/lib/ticketing-data';
-import { TicketStatusUpdateInput, useTickets } from './TicketContext';
+import { TicketStatusUpdateInput } from './TicketContext';
+import { useTickets } from './useTickets';
 import { X, Clock, MapPin, User, Calendar, Tag, MessageSquare, Phone, Lock, Pencil, Save, Trash2, Link2 } from 'lucide-react';
 import { MomenceAutomationPanel } from './MomenceAutomationPanel';
 

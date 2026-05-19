@@ -2,9 +2,8 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/components/ticketing/ChatInterface.tsx', import.meta.url), 'utf8');
 const contextPickerSource = readFileSync(new URL('../src/components/ticketing/ContextPicker.tsx', import.meta.url), 'utf8');
-const quickTemplatesSource = readFileSync(new URL('../src/components/ticketing/QuickTemplates.tsx', import.meta.url), 'utf8');
 const intakeRulesSource = readFileSync(new URL('../src/lib/intake-rules.ts', import.meta.url), 'utf8');
-const sourceWithoutComments = `${source}\n${contextPickerSource}\n${quickTemplatesSource}`
+const sourceWithoutComments = `${source}\n${contextPickerSource}`
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/\/\/.*$/gm, '');
 const intakeRulesWithoutComments = intakeRulesSource

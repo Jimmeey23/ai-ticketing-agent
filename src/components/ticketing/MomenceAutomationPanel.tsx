@@ -187,7 +187,7 @@ export const MomenceAutomationPanel: React.FC<Props> = ({ ticket }) => {
       {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-700">{notice}</div>}
 
       <div className="grid grid-cols-1 gap-2">
-        <SearchBox
+        <SearchBox<MomenceMemberOption>
           icon={<User className="w-3.5 h-3.5" />}
           label="Member"
           query={memberQuery}
@@ -196,7 +196,7 @@ export const MomenceAutomationPanel: React.FC<Props> = ({ ticket }) => {
           selectedLabel={selectedMember?.label}
           onSelect={setSelectedMember}
         />
-        <SearchBox
+        <SearchBox<MomenceSessionOption>
           icon={<Calendar className="w-3.5 h-3.5" />}
           label="Session"
           query={sessionQuery}

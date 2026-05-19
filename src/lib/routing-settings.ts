@@ -151,7 +151,7 @@ const ROUTING_PRESET_GROUPS = {
   // CST grouping by studio for default routing ownership pools.
   kwalitySales: ['Akshay Rane', 'Sheetal Kataria', 'Vahishta Fitter', 'Zaheer Agarbattiwala', 'Taahira Sayyed'],
   bandraSales: ['Imran Shaikh', 'Shipra Pinge', 'Nadiya Shaikh', 'Deesha Changwani'],
-  bengaluruSales: ['Api Serou', 'Prathap K P', 'Sashi Singh', 'Yashas K'],
+  bengaluruSales: ['Yashas K', 'Sashi Singh', 'Api Serou', 'Prathap K P'],
   mumbaiOps: ['Zahur Shaikh'],
   bengaluruOps: ['Shifa Ali'],
   mumbaiTraining: ['Mrigakshi Jaiswal', 'Vivaran Dhasmana'],

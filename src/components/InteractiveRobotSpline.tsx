@@ -11,6 +11,17 @@ interface InteractiveRobotSplineProps {
   smile?: boolean;
 }
 
+interface SplineObjectLike {
+  rotation?: {
+    x: number;
+    y: number;
+  };
+}
+
+interface SplineAppLike {
+  findObjectByName?: (name: string) => SplineObjectLike | undefined;
+}
+
 export default function InteractiveRobotSpline({
   scene,
   className,
@@ -18,7 +29,7 @@ export default function InteractiveRobotSpline({
   smile = false,
 }: InteractiveRobotSplineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const splineRef = useRef<any>(null);
+  const splineRef = useRef<SplineAppLike | null>(null);
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
@@ -51,7 +62,7 @@ export default function InteractiveRobotSpline({
           </div>
         }
       >
-        <Spline scene={scene} onLoad={(spline) => { splineRef.current = spline; }} />
+        <Spline scene={scene} onLoad={(spline: SplineAppLike) => { splineRef.current = spline; }} />
       </Suspense>
       {smile && <span className="pointer-events-none absolute left-1/2 top-[58%] h-2.5 w-5 -translate-x-1/2 rounded-b-full border-b-2 border-rose-500/80" />}
     </div>

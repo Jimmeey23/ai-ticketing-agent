@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { TicketProvider } from './ticketing/TicketContext';
-import { useTickets } from './ticketing/TicketContext';
+import { useTickets } from './ticketing/useTickets';
 import { ChatInterface } from './ticketing/ChatInterface';
 import { TicketDetailDrawer } from './ticketing/TicketDetailDrawer';
 import { AuthGate } from './AuthGate';
@@ -104,9 +104,15 @@ const SupportShell: React.FC = () => {
     return () => window.clearInterval(handle);
   }, []);
 
+  const openEmptyIntake = () => {
+    setSelectedTicket(null);
+    setActiveTab('chat');
+    setChatResetVersion((version) => version + 1);
+  };
+
   const goHome = () => {
     navigate('/');
-    setActiveTab('chat');
+    openEmptyIntake();
   };
 
   const handleTabChange = (value: string) => {
@@ -119,8 +125,7 @@ const SupportShell: React.FC = () => {
   };
 
   const startNewChat = () => {
-    setActiveTab('chat');
-    setChatResetVersion((version) => version + 1);
+    openEmptyIntake();
   };
 
   const sidebarExpanded = sidebarPinned || sidebarHovered;

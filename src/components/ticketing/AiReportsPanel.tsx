@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useTickets } from './TicketContext';
+import { useTickets } from './useTickets';
 import { backendSupabase } from '@/lib/backend-supabase';
 import {
   ALL_REPORT_DEFINITIONS,

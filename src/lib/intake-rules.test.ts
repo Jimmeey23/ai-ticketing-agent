@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   captureMemberVoiceFromText,
+  getIntakeFieldDefinitions,
   getMissingIntakeFields,
   inferIntakeContextFromText,
   isIntakePublishable,
@@ -47,9 +48,9 @@ describe('intake publishability rules', () => {
     expect(isMissingIntakeValue('Member-reported issue')).toBe(true);
     expect(isMissingIntakeValue('AI Intake')).toBe(true);
     expect(isMissingIntakeValue('Bandra')).toBe(false);
-    expect(getMissingIntakeFields(context)).toEqual(['reportedBy', 'description']);
+    expect(getMissingIntakeFields(context)).toEqual(['studio', 'incidentDateTime', 'reportedBy']);
 
-    expect(getMissingIntakeFields({ ...context, studio: 'Bandra' })).toEqual(['reportedBy', 'description']);
+    expect(getMissingIntakeFields({ ...context, studio: 'Bandra' })).toEqual(['incidentDateTime', 'reportedBy']);
   });
 
   it('marks a complete member-facing complaint context publishable', () => {
@@ -225,5 +226,81 @@ describe('intake publishability rules', () => {
 
     expect(getMissingIntakeFields(context)).toContain('memberName');
     expect(getMissingIntakeFields({ ...context, memberId: 'mom_123', memberName: 'Asha Mehta' })).not.toContain('memberName');
+  });
+
+  it('asks washing machine operational questions without member or class fields', () => {
+    const text = 'washing machine not working';
+    const context: IntakeContext = {
+      ...inferIntakeContextFromText(text),
+      initialReport: text,
+      reportedBy: 'ops@physique57india.com',
+    };
+
+    expect(context).toMatchObject({
+      intakeRoute: 'Internal Reporting',
+      category: 'Repair and Maintenance',
+      subCategory: 'Broken Equipment Not Repaired',
+    });
+
+    expect(getMissingIntakeFields(context)).toEqual([
+      'studio',
+      'incidentDateTime',
+      'machineSymptom',
+      'operationalImpact',
+      'currentWorkaround',
+      'resolutionRequirement',
+    ]);
+    expect(getMissingIntakeFields(context)).not.toContain('memberName');
+    expect(getMissingIntakeFields(context)).not.toContain('classType');
+    expect(getIntakeFieldDefinitions(context).map((field) => field.id)).toContain('machineSymptom');
+  });
+
+  it('asks door lock operational questions and infers Kwality without entity fields', () => {
+    const text = 'door lock not closing at Kwality';
+    const context: IntakeContext = {
+      ...inferIntakeContextFromText(text),
+      initialReport: text,
+      reportedBy: 'ops@physique57india.com',
+    };
+
+    expect(context).toMatchObject({
+      category: 'Repair and Maintenance',
+      subCategory: 'Door Lock Issues',
+      studio: 'Kwality House, Kemps Corner',
+    });
+
+    expect(getMissingIntakeFields(context)).toEqual([
+      'incidentDateTime',
+      'lockFaultType',
+      'accessStatus',
+      'securityRisk',
+      'resolutionRequirement',
+    ]);
+    expect(getMissingIntakeFields(context)).not.toContain('memberName');
+    expect(getMissingIntakeFields(context)).not.toContain('classType');
+  });
+
+  it('uses HVAC-specific repair fields for AC breakdown reports', () => {
+    const text = 'AC not cooling in Bandra studio';
+    const context: IntakeContext = {
+      ...inferIntakeContextFromText(text),
+      initialReport: text,
+      reportedBy: 'ops@physique57india.com',
+    };
+
+    expect(context).toMatchObject({
+      category: 'Repair and Maintenance',
+      subCategory: 'AC and HVAC Issues',
+      studio: 'Supreme HQ, Bandra',
+    });
+
+    expect(getMissingIntakeFields(context)).toEqual([
+      'incidentDateTime',
+      'hvacSymptom',
+      'affectedArea',
+      'operationalImpact',
+      'currentWorkaround',
+      'resolutionRequirement',
+    ]);
   });
 });

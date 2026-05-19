@@ -5,6 +5,14 @@ const fallbackAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjNmZjFjZWI
 
 const backendSupabaseUrl = import.meta.env.VITE_TICKETING_SUPABASE_URL || fallbackUrl;
 const backendSupabaseAnonKey = import.meta.env.VITE_TICKETING_SUPABASE_ANON_KEY || fallbackAnonKey;
+const ticketingFunctionsSupabaseUrl =
+  import.meta.env.VITE_TICKET_AI_SUPABASE_URL ||
+  import.meta.env.VITE_TICKETING_FUNCTIONS_SUPABASE_URL ||
+  fallbackUrl;
+const ticketingFunctionsSupabaseAnonKey =
+  import.meta.env.VITE_TICKET_AI_SUPABASE_ANON_KEY ||
+  import.meta.env.VITE_TICKETING_FUNCTIONS_SUPABASE_ANON_KEY ||
+  fallbackAnonKey;
 
 export const backendSupabase = createClient(backendSupabaseUrl, backendSupabaseAnonKey, {
   auth: {
@@ -19,3 +27,15 @@ export const backendSupabase = createClient(backendSupabaseUrl, backendSupabaseA
     },
   },
 });
+
+export const ticketingFunctionsSupabase = createClient(
+  ticketingFunctionsSupabaseUrl,
+  ticketingFunctionsSupabaseAnonKey,
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  }
+);

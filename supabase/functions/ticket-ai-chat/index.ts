@@ -42,6 +42,7 @@ type RequestBody = {
   messages?: ChatMessage[];
   conversationId?: string | null;
   context?: Record<string, unknown>;
+  intakeContract?: Record<string, unknown>;
   masterData?: Record<string, unknown>;
   reportId?: string;
   period?: Record<string, unknown>;
@@ -53,30 +54,63 @@ type RequestBody = {
   assumptions?: string[];
 };
 
+// This is the fallback prompt used only when the frontend does not send instructions.
+// The authoritative prompt is in ChatInterface.tsx and is always sent as body.instructions.
+// Keep both in sync.
 const ATHENA_SYSTEM_PROMPT = `
 You are Athena, the Physique 57 India internal operations ticket intake assistant.
 
-Behavior rules:
-- Start from the internal team member's free-text documentation of member voice.
-- Infer exactly one intake route: Request, Complaint, Feedback, or Internal Reporting.
-- Infer the best category and subcategory from the approved master data. Do not require the user to manually select them before asking issue-specific details.
-- Infer priority and include a short urgency reason based on member impact, safety risk, retention risk, billing urgency, and escalation language.
-- Ask only for operational details that are missing after inference and are relevant to the described incident.
-- Do not draft a ticket until all required fields are available.
-- Do not ask multiple prose questions. Return a structured detailForm with full field definitions when multiple details are missing; ask only one concise question when exactly one detail is missing.
-- Dynamically decide issue-specific fields from the incident text, inferred route/category/subcategory, and current context. Do not use fixed incident templates or static question sets.
-- For issue-specific fields, return full field definitions with labels and options tailored to that exact incident when useful.
-- Always populate inferredContext with category, subCategory, intakeRoute, and priority once inferred, even when asking for more details.
-- Before returning any detailForm, decide which context fields are actually required for this specific incident; omit unrelated Momence member, session, class, and trainer fields.
-- Ask for member, session, class, or trainer details only when the described incident actually requires them. Do not include selected/stale member, session, class, or trainer context in the draft unless it is relevant to the ticket.
-- Use date fields for dates and datetime-local fields for date/time fields.
-- Use only approved master-data options for studios, instructors, class types, categories, subcategories, priorities, associates, and route buttons.
-- Use provided routingRules, employees, departments, and locations as authoritative when present. Do not invent owner names, departments, escalation paths, SLAs, or locations.
-- Ticket titles must use the most specific issue and known member/session/studio context, not generic labels. Include selected member or session names when known.
-- Member and class/session details are selected through Momence-powered UI fields, not ordinary text boxes when a structured form is shown.
-- For freeze, rollover, membership, and package-specific requests, require a selected member first and then use only that member's active memberships.
-- Write ticket content in third-person internal documentation language, focused on what the community member stated.
-- Ticket creation happens only after explicit approval of the displayed draft.
+YOUR GOAL: Turn a staff member's initial report into a complete, actionable ticket — one the assigned owner can act on immediately without asking a single follow-up question.
+
+HOW TO DECIDE WHAT TO ASK:
+Read the initial report and ask yourself: what would the person assigned this ticket need to know to act?
+Think through the incident from their perspective — what is the specific fault or situation, where exactly, when did it start, what is the current impact, what constraints exist right now, and what outcome is expected?
+Identify what is missing from the initial report and collect only that — in a single structured form.
+
+Do not use a fixed list of fields. Reason about the specific incident being described and decide what gaps exist.
+For example: a broken door at a studio entrance raises different questions than a broken door in a locker room — one has overnight security implications, the other does not. A washing machine not draining needs different questions than one that won't turn on. A trainer arriving late to a 7am class raises different urgency questions than a 7pm class. Think contextually.
+
+IMPORTANT — for physical, maintenance, or facility issues:
+Never use 'description' as a field ID. Generate specific, targeted field IDs that describe exactly what you're asking (e.g. latch_fault_type, door_access_status, water_source, machine_symptom, security_concern, resolution_approach). The first form must collect the full operational picture — fault specifics, current access or safety implications, and the expected resolution — all in one go. Do not produce a generic description box; produce questions whose answers would let the assigned owner act immediately.
+
+FORM DESIGN RULES:
+- Collect all missing information in ONE detailForm — do not spread it across multiple rounds when the gaps are knowable upfront
+- Field labels must describe exactly what you're asking, specific to this incident — not generic
+- For bounded answer spaces, use select with options tailored to the situation
+- For open descriptions, use textarea with a placeholder hint that reflects the item being reported
+- Use datetime-local for timestamps, date for date-only, number for counts
+- Field IDs must be snake_case and self-describing (e.g. door_fault_type, current_access_situation)
+- Never ask for reportedBy — the frontend supplies it from the signed-in user
+
+WHEN TO DRAFT IMMEDIATELY vs WHEN TO ASK FIRST:
+Draft immediately only if the initial report already contains everything the assigned owner needs.
+If any of the following is missing — exact nature of the fault, timing, operational impact, or resolution needed — collect it first.
+A one-sentence report is rarely enough to draft from. Probe before drafting.
+
+INTAKE INFERENCE:
+- Infer exactly one intake route: Request, Complaint, Feedback, or Internal Reporting
+- Infer the best category and subcategory from approved master data — do not require manual selection
+- Infer priority with a short urgency reason
+- Always populate inferredContext with category, subCategory, intakeRoute, and priority once inferred, even while asking for more details
+
+ENTITY FIELDS — memberName, memberContact, classType, classDateTime, trainer, sessionId, membership:
+These fields refer to a specific named person or class booking in Momence. Include them ONLY when the incident is directly about or requires one.
+Ask yourself: does resolving this issue require knowing who a specific member is, or which specific class booking it relates to?
+If the answer is no — do not include entity fields.
+Issues that never need entity fields: anything physical (door, machine, AC, plumbing, lighting, pest), ambient environment, tech/ops systems, app or Wi-Fi issues.
+Issues that need entity fields: a named member's billing request, a freeze or rollover for a specific person, a complaint about how a trainer treated a named member in a specific class.
+For membership/billing requests: require the member selection first, then ask about their specific package and dates.
+
+ROUTING AND MASTER DATA:
+- Use only approved master-data values for studios, trainers, class types, categories, subcategories, priorities, and associates
+- Use provided routingRules, employees, departments, and locations as authoritative — never invent names, escalation paths, or SLAs
+- Member and class/session fields must use Momence-powered UI pickers, not plain text inputs
+
+TICKET QUALITY:
+- Title: specific operational summary — name the exact item, area, studio, or person. Not "Maintenance issue" or "Member complaint"
+- Description: factual, third-person internal language. What was reported, what the impact is, what resolution is expected
+- Priority: Critical for safety or access risk, High for service failure affecting classes, Medium for operational issues, Low for cosmetic or deferred items
+- Ticket creation happens only after explicit user approval of the displayed draft
 `.trim();
 
 type AiDetailField = {
@@ -135,7 +169,21 @@ type DetailFieldId =
   | 'hostedFeedbackArea'
   | 'attendeeCount'
   | 'prospectQuality'
-  | 'followUpPreference';
+  | 'followUpPreference'
+  | 'machineSymptom'
+  | 'hvacSymptom'
+  | 'lockFaultType'
+  | 'accessStatus'
+  | 'securityRisk'
+  | 'plumbingSymptom'
+  | 'electricalSymptom'
+  | 'affectedArea'
+  | 'operationalImpact'
+  | 'currentWorkaround'
+  | 'resolutionRequirement'
+  | 'appIssueSurface'
+  | 'appErrorObserved'
+  | 'deviceContext';
 
 const PRIORITY_SLA_HOURS: Record<Priority, number> = {
   Critical: 2,
@@ -145,6 +193,7 @@ const PRIORITY_SLA_HOURS: Record<Priority, number> = {
 };
 
 const PLACEHOLDER_VALUE_PATTERN = /unspecified|not specified|member-reported issue|ai intake|authenticated user/i;
+const HVAC_TEXT_PATTERN = /\b(?:ac|hvac)\b|air\s?con|air conditioning|not cooling|not heating|no airflow/i;
 
 const ASSIGNMENT_RULES: Record<string, { assignedTo: string; team: string }> = {
   Scheduling: { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' },
@@ -157,15 +206,15 @@ const ASSIGNMENT_RULES: Record<string, { assignedTo: string; team: string }> = {
   'Pricing and Memberships': { assignedTo: 'Pujal Jathar', team: 'Accounts' },
   'Customer Service and Communication': { assignedTo: 'Nunu Yeptomi', team: 'Customer Service' },
   'Brand Feedback': { assignedTo: 'Saachi Shetty', team: 'Marketing' },
-  'Safety and Security': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
+  'Safety and Security': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
   'Theft and Lost Items': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
   Miscellaneous: { assignedTo: 'Nunu Yeptomi', team: 'Customer Service' },
   'Instructor & Class Quality': { assignedTo: 'Anisha Shah', team: 'Training' },
   'Booking & Schedule': { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' },
   'Facility & Equipment': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
   'Billing & Membership': { assignedTo: 'Pujal Jathar', team: 'Accounts' },
-  'Safety & Medical': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
-  'Front Desk & Service': { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' },
+  'Safety & Medical': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
+  'Front Desk & Service': { assignedTo: 'Nunu Yeptomi', team: 'Customer Service' },
   'App & Digital': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
   'Hosted Class & Partnerships': { assignedTo: 'Saachi Shetty', team: 'Marketing' },
   'Member Progress & Transformation': { assignedTo: 'Anisha Shah', team: 'Training' },
@@ -284,15 +333,17 @@ function fallbackDraft(messages: ChatMessage[] = [], context: Record<string, unk
   const text = cleanString(context.description) || latestUserMessage.replace(/\[Context[^\n]*\]\n?/i, '').trim();
   const lower = text.toLowerCase();
   let inferredCategory = 'General Feedback';
-  if (lower.includes('billing') || lower.includes('refund') || lower.includes('payment') || lower.includes('freeze') || lower.includes('roll over') || lower.includes('rollover') || lower.includes('extension')) {
+  if (/billing|refund|payment|freeze|roll over|rollover|extension|membership|package/.test(lower)) {
     inferredCategory = 'Pricing and Memberships';
-  } else if (lower.includes('hosted') || lower.includes('partner') || lower.includes('influencer')) {
+  } else if (/hosted|partner|influencer/.test(lower)) {
     inferredCategory = 'Hosted Class & Partnerships';
-  } else if (lower.includes('injury') || lower.includes('safety') || lower.includes('medical') || lower.includes('security') || lower.includes('theft') || lower.includes('stolen') || lower.includes('missing cash')) {
+  } else if (/injury|safety|medical|security|theft|stolen|missing cash|harass/.test(lower)) {
     inferredCategory = 'Safety and Security';
-  } else if (lower.includes('equipment') || lower.includes('ac') || lower.includes('locker') || lower.includes('clean')) {
+  } else if (/repair|maintenance|broken|not working|not closing|not opening|stopped working|won't close|won't open|malfunction|faulty|damaged|leak|leaking|plumbing|drain|clog|flush|machine|washing|dryer|pump|electrical|socket|bulb|pest|mold|mould|crack|\bdoor\b|\block\b|handle|hinge/.test(lower) || HVAC_TEXT_PATTERN.test(lower)) {
+    inferredCategory = 'Repair and Maintenance';
+  } else if (/odour|odor|smell|ventilation|air quality|locker|shower|washroom|steam|clean|dirty|hygiene|temperature|too hot|too cold|air\s?con|amenity/.test(lower)) {
     inferredCategory = 'Studio Amenities and Facilities';
-  } else if (lower.includes('trainer') || lower.includes('instructor') || lower.includes('class')) {
+  } else if (/trainer|instructor|class/.test(lower)) {
     inferredCategory = 'Class Experience';
   }
   const category = cleanString(context.category, inferredCategory);
@@ -401,6 +452,45 @@ function normalizeAiIntakeResponse(value: Record<string, unknown> | null): AiInt
   };
 }
 
+/**
+ * Entity fields that should only appear in a detailForm when the business-logic guard
+ * (requiredFieldsForIssue) also says they are needed.
+ * This prevents the AI from hallucinating member/class fields for facility issues.
+ */
+const PROTECTED_ENTITY_FIELD_IDS = new Set([
+  'memberName',
+  'memberContact',
+  'memberId',
+  'classType',
+  'classDateTime',
+  'trainer',
+  'sessionId',
+  'membership',
+]);
+
+/**
+ * Removes protected entity fields from the AI's proposed detailForm unless the business
+ * rules guard also flagged them as required. Non-entity (issue-specific) fields from
+ * the AI are always kept so the AI can still ask its own contextual questions.
+ */
+function filterAiDetailFormFields(
+  form: AiDetailForm | null | undefined,
+  guardedFields: DetailFieldId[],
+): AiDetailForm | null {
+  if (!form) return null;
+  const guardedSet = new Set<string>(guardedFields);
+  const filteredFields = form.fields.filter((field) => {
+    if (field.id === 'reportedBy') return false;
+    if (field.id === 'description' && guardedSet.size > 0 && !guardedSet.has('description')) return false;
+    // Always keep issue-specific fields the AI generates (e.g. incidentDateTime, freezeReason, etc.)
+    if (!PROTECTED_ENTITY_FIELD_IDS.has(field.id)) return true;
+    // Only keep entity fields when the rules-based guard also requires them
+    return guardedSet.has(field.id as DetailFieldId);
+  });
+  if (filteredFields.length === 0) return null;
+  return { ...form, fields: filteredFields };
+}
+
 async function askAiForIntake(body: RequestBody, instructions: string): Promise<AiIntakeResponse | null> {
   const apiKey = Deno.env.get('OPENAI_API_KEY');
   if (!apiKey) return null;
@@ -438,6 +528,7 @@ async function askAiForIntake(body: RequestBody, instructions: string): Promise<
           role: 'user',
           content: JSON.stringify({
             context: body.context || {},
+            intakeContract: body.intakeContract || {},
             masterData: body.masterData || {},
             messages: body.messages || [],
           }),
@@ -580,7 +671,14 @@ async function askAiForReportNarrative(body: RequestBody): Promise<AiReportNarra
 }
 
 function inferContextFromText(text: string, context: Record<string, unknown> = {}): Record<string, string> {
-  const lower = `${text} ${cleanString(context.requestType)} ${cleanString(context.category)} ${cleanString(context.subCategory)}`.toLowerCase();
+  const lower = [
+    text,
+    cleanString(context.initialReport),
+    cleanString(context.requestType),
+    cleanString(context.category),
+    cleanString(context.subCategory),
+    cleanString(context.description),
+  ].filter(Boolean).join(' ').toLowerCase();
   const inferred: Record<string, string> = {};
 
   if (!cleanString(context.intakeRoute)) {
@@ -604,12 +702,45 @@ function inferContextFromText(text: string, context: Record<string, unknown> = {
     } else if (/injury|safety|medical|harassment|security|theft|stolen|missing cash|cash envelope|unsafe|faint|cramp|conflict/.test(lower)) {
       inferred.category = 'Safety and Security';
       inferred.subCategory = /theft|stolen|missing cash|cash envelope/.test(lower) ? 'Theft Prevention Measures' : /harass|conflict/.test(lower) ? 'Harassment Reports' : 'Personal Safety Concerns';
-    } else if (/equipment|ac|temperature|locker|clean|odour|audio|lighting|washroom|shower/.test(lower)) {
+    } else if (
+      /repair|maintenance|broken|not working|not closing|not opening|stopped working|isn't working|isnt working|won't close|won't open|malfunction|faulty|damaged|damage|crack|cracked|leak|leaking|overflow|plumbing|drain|clog|clogged|flush|sewage|socket|electrical|wiring|bulb|fused|flickering|lights not|light not|machine|washing machine|dryer|washing|pump|generator|pest|pest control|mold|mould|damp|seepage|\bdoor\b|\block\b|latch|handle|hinge/.test(lower) ||
+      HVAC_TEXT_PATTERN.test(lower)
+    ) {
+      inferred.category = 'Repair and Maintenance';
+      inferred.subCategory = HVAC_TEXT_PATTERN.test(lower) ? 'AC and HVAC Issues'
+        : /light|bulb|fused|flickering/.test(lower) ? 'Lighting Issues'
+        : /audio|speaker|mic|sound/.test(lower) ? 'Audio System Malfunction'
+        : /leak|plumbing|drain|flush|sewage|overflow|clog|pipe/.test(lower) ? 'Plumbing Leaks'
+        : /pest|cockroach|rat|rodent|insect|ant/.test(lower) ? 'Pest Control Needed'
+        : /door|lock|handle|hinge/.test(lower) ? 'Door Lock Issues'
+        : /machine|washing|dryer|equipment|broken|not working|malfunction|faulty/.test(lower) ? 'Broken Equipment Not Repaired'
+        : 'General Maintenance Delays';
+    } else if (/odour|odor|smell|stench|ventilation|air quality|locker|shower|washroom|toilet|steam room|valet|parking|wi-fi|wifi|boutique|retail|amenity|amenities|cleanliness|hygiene|clean|dirty/.test(lower)) {
       inferred.category = 'Studio Amenities and Facilities';
-      inferred.subCategory = /temperature|ac|cold|hot|ventilation|air quality/.test(lower) ? 'Air Quality Poor' : /clean|hygiene/.test(lower) ? 'Cleanliness and Hygiene' : /locker/.test(lower) ? 'Locker Availability' : /boutique|retail/.test(lower) ? 'Boutique Availability Issues' : 'Studio Odour and Aroma';
+      inferred.subCategory = /temperature|too hot|too cold|cold|hot/.test(lower) ? 'Air Quality Poor'
+        : /ventilation|air quality/.test(lower) ? 'Ventilation Poor'
+        : /clean|hygiene|dirty/.test(lower) ? 'Cleanliness and Hygiene'
+        : /locker/.test(lower) ? 'Locker Availability'
+        : /boutique|retail/.test(lower) ? 'Boutique Availability Issues'
+        : /steam/.test(lower) ? 'Steam Room Not Working'
+        : 'Studio Odour and Aroma';
+    } else if (/temperature|too hot|too cold|air\s?con|air quality/.test(lower)) {
+      // Temperature/AC complaints that didn't match maintenance (i.e. comfort complaints, not breakdowns)
+      inferred.category = 'Studio Amenities and Facilities';
+      inferred.subCategory = 'Air Quality Poor';
     } else if (/trainer|instructor|class|music|cue|correction|adjustment|overcrowded/.test(lower)) {
       inferred.category = /trainer|instructor|correction|adjustment|punctual|engagement|no-show/.test(lower) ? 'Trainer Feedback' : 'Class Experience';
       inferred.subCategory = /overcrowd|capacity/.test(lower) ? 'Overcrowding in Class' : /audio|music|loud/.test(lower) ? 'Audio Issues' : /punctual|late|no-show/.test(lower) ? 'Trainer Punctuality Issues' : /intensity/.test(lower) ? 'Class Intensity Too High/Low' : 'Class Flow and Pacing';
+    } else if (/app crash|app not|app freezing|login issue|login error|password reset|push notification|booking confirmation missing|payment gateway|momence account|sync issue|profile issue|website glitch|website not|website down|qr code|ipad not|ipad issue/.test(lower)) {
+      inferred.category = 'App & Digital';
+      inferred.subCategory = /crash|freeze|not responding/.test(lower) ? 'App Crash'
+        : /login|password/.test(lower) ? 'Login Issue'
+        : /notification/.test(lower) ? 'Push Notifications'
+        : /payment|gateway/.test(lower) ? 'Payment Gateway Issue'
+        : /momence|sync/.test(lower) ? 'Momence Account Sync'
+        : /booking confirm/.test(lower) ? 'Booking Confirmation Missing'
+        : /website/.test(lower) ? 'Website Chat / Lead Form Issue'
+        : 'App Crash';
     } else if (/booking|schedule|class availability|late entry|waitlist|cancelled|reschedule|timing|variety/.test(lower)) {
       inferred.category = 'Scheduling';
       inferred.subCategory = /late entry/.test(lower) ? 'Late Arrival Policy' : /availability|variety/.test(lower) ? 'Additional Classes' : /cancel/.test(lower) ? 'Last-minute Cancellations' : 'Class Capacity Issues';
@@ -644,7 +775,14 @@ function inferContextFromText(text: string, context: Record<string, unknown> = {
 }
 
 function requiredFieldsForIssue(text: string, context: Record<string, unknown>): DetailFieldId[] {
-  const lower = `${text} ${cleanString(context.requestType)} ${cleanString(context.category)} ${cleanString(context.subCategory)}`.toLowerCase();
+  const lower = [
+    text,
+    cleanString(context.initialReport),
+    cleanString(context.requestType),
+    cleanString(context.category),
+    cleanString(context.subCategory),
+    cleanString(context.description),
+  ].filter(Boolean).join(' ').toLowerCase();
   const intakeRoute = cleanString(context.intakeRoute);
   const route = intakeRoute.toLowerCase();
   const category = cleanString(context.category);
@@ -676,6 +814,15 @@ function requiredFieldsForIssue(text: string, context: Record<string, unknown>):
     'Facility & Equipment',
     'Front Desk & Service',
   ]);
+  // Categories that are strictly facility/ops — a specific member is never required
+  const physicalOnlyCategories = new Set([
+    'Repair and Maintenance',
+    'Studio Amenities and Facilities',
+    'Facility & Equipment',
+    'Operating Systems',
+    'Tech Issues',
+    'App & Digital',
+  ]);
   const memberFacingCategories = new Set([
     'Scheduling',
     'Class Experience',
@@ -696,13 +843,58 @@ function requiredFieldsForIssue(text: string, context: Record<string, unknown>):
   const hostedSpecific = /hosted|partner|influencer|partnership/.test(lower) || category === 'Hosted Class & Partnerships';
   const prioritySpecific = route !== 'feedback' || /safety|security|theft|repair|maintenance|tech|operating|pricing|membership|customer service|complaint|urgent|injury|hazard/.test(`${category} ${subCategory} ${lower}`.toLowerCase());
 
-  if (physicalStudioCategories.has(category) && /select studio|which studio|studio record|exact studio/.test(lower)) add('studio', context.studio);
+  // Always require studio for any physical in-studio category — no keyword guard needed
+  if (physicalStudioCategories.has(category)) add('studio', context.studio);
+
+  // For physical/maintenance/amenity issues, always require when it was first noticed.
+  // This is a structural guard — the AI decides everything else about what to ask.
+  const isPhysicalCategory = physicalOnlyCategories.has(category);
+  if (isPhysicalCategory) {
+    add('incidentDateTime', context.incidentDateTime);
+    if (/washing|washer|laundry|dryer|machine/.test(lower) || subCategory === 'Broken Equipment Not Repaired') {
+      add('machineSymptom', context.machineSymptom);
+      add('operationalImpact', context.operationalImpact);
+      add('currentWorkaround', context.currentWorkaround);
+      add('resolutionRequirement', context.resolutionRequirement);
+    } else if (/door|lock|latch|handle|hinge|access|closing|opening/.test(lower) || subCategory === 'Door Lock Issues') {
+      add('lockFaultType', context.lockFaultType);
+      add('accessStatus', context.accessStatus);
+      add('securityRisk', context.securityRisk);
+      add('resolutionRequirement', context.resolutionRequirement);
+    } else if (HVAC_TEXT_PATTERN.test(lower) || subCategory === 'AC and HVAC Issues') {
+      add('hvacSymptom', context.hvacSymptom);
+      add('affectedArea', context.affectedArea);
+      add('operationalImpact', context.operationalImpact);
+      add('currentWorkaround', context.currentWorkaround);
+      add('resolutionRequirement', context.resolutionRequirement);
+    } else if (/plumbing|leak|drain|clog|flush|sewage|overflow|pipe|water/.test(lower) || subCategory === 'Plumbing Leaks') {
+      add('plumbingSymptom', context.plumbingSymptom);
+      add('affectedArea', context.affectedArea);
+      add('operationalImpact', context.operationalImpact);
+      add('currentWorkaround', context.currentWorkaround);
+      add('resolutionRequirement', context.resolutionRequirement);
+    } else if (/light|lighting|bulb|fused|flickering|electrical|socket|wiring|power|trip/.test(lower) || subCategory === 'Lighting Issues') {
+      add('electricalSymptom', context.electricalSymptom);
+      add('affectedArea', context.affectedArea);
+      add('operationalImpact', context.operationalImpact);
+      add('currentWorkaround', context.currentWorkaround);
+      add('resolutionRequirement', context.resolutionRequirement);
+    } else if (/app|website|login|password|payment gateway|momence|sync|qr|ipad|wi-?fi|wifi|router/.test(lower) || category === 'App & Digital' || category === 'Tech Issues') {
+      add('appIssueSurface', context.appIssueSurface);
+      add('appErrorObserved', context.appErrorObserved);
+      add('deviceContext', context.deviceContext);
+      add('operationalImpact', context.operationalImpact);
+      add('currentWorkaround', context.currentWorkaround);
+    }
+  }
   const specificMemberRequired =
     (/select member|momence member|member profile|which member|member record|link member/.test(lower) ||
       /refund|freeze|roll|extension|membership|package|renewal|payment|billing/.test(lower)) &&
     !/multiple|several|attendees|leads|prospects|team|staff|internal report|hosted class|post-class|regional operations|sales team/.test(lower) &&
     category !== 'Hosted Class & Partnerships' &&
-    category !== 'Sales & Consultation';
+    category !== 'Sales & Consultation' &&
+    // Never ask for a member for pure facility/maintenance/ops/tech issues
+    !physicalOnlyCategories.has(category);
   if (route !== 'internal reporting' && specificMemberRequired && (memberFacingCategories.has(category) || membershipSpecific)) add('memberName', context.memberId || context.memberName);
   if (membershipSpecific && /select active membership|which membership|membership record|package record/.test(lower)) {
     add('membership', context.membership);
@@ -728,18 +920,25 @@ function requiredFieldsForIssue(text: string, context: Record<string, unknown>):
       add('followUpPreference', context.followUpPreference);
     }
   }
-  if ((route === 'request' || route === 'complaint') && /desired resolution|requested resolution|what resolution|what does the member want/.test(lower)) add('desiredResolution', context.desiredResolution);
+  // desiredResolution: let the AI decide whether to ask — only add as a guard for explicit
+  // member requests/complaints where the intake route is known and it is genuinely missing
+  if (route === 'request' && !physicalOnlyCategories.has(category) && /desired resolution|requested resolution|what resolution/.test(lower)) {
+    add('desiredResolution', context.desiredResolution);
+  }
   if ((route === 'feedback' || route === 'complaint') && /sentiment unclear|member sentiment|how upset|frustration level/.test(lower)) add('memberSentiment', context.memberSentiment);
 
   add('reportedBy', context.reportedBy);
   if (prioritySpecific) add('priority', context.priority);
-  add('description', context.description);
+  // For physical/maintenance/facility categories the AI captures operational detail through
+  // custom field IDs (e.g. latch_fault_type, door_access_status) — NOT the generic 'description'
+  // field. Requiring 'description' for physical issues causes the form to show the generic
+  // "Describe the issue" placeholder instead of the AI's contextual, targeted questions.
+  // For all other categories, require description if not yet captured.
+  if (!isPhysicalCategory) {
+    add('description', context.description);
+  }
 
   return Array.from(new Set(fields));
-}
-
-function needsStructuredDetails(text: string, context: Record<string, unknown>): DetailFieldId[] {
-  return requiredFieldsForIssue(text, context);
 }
 
 function buildSourceRef(draft: DraftTicket, context: Record<string, unknown> = {}, conversationId?: string | null): string {
@@ -922,21 +1121,75 @@ Deno.serve(async (request) => {
     const messages = body.messages || [];
     const instructions = cleanString(body.instructions, ATHENA_SYSTEM_PROMPT);
     const latestUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content || '';
-    const aiResponse = await askAiForIntake(body, instructions);
+
+    // Strip context preamble the frontend prepends to get the raw issue text
+    const rawIssueText = latestUserMessage.replace(/^\[Context[^\]]*\]\s*/i, '').trim();
+
+    const isFormSubmission = /^here are the missing details/i.test(rawIssueText);
+    const bodyContext = body.context || {};
+    const effectiveBodyContext: Record<string, unknown> = { ...bodyContext };
+    if (!isFormSubmission && !cleanString(effectiveBodyContext.initialReport) && rawIssueText) {
+      effectiveBodyContext.initialReport = rawIssueText;
+    }
+
+    // Detect whether this is a physical/facility/maintenance issue from the text or the already-
+    // inferred category. Physical issues need full operational detail — a brief one-liner must NOT
+    // be treated as a complete description, because that would skip asking for fault detail,
+    // operational impact, incident time, and resolution approach.
+    const rawLower = rawIssueText.toLowerCase();
+    const physicalIssueKeywords = /repair|maintenance|broken|not working|not closing|not opening|stopped working|isn't working|won't close|won't open|not cooling|not heating|too hot|too cold|very hot|very cold|temperature|malfunction|faulty|damaged|leak|leaking|overflow|plumbing|drain|clog|flush|sewage|socket|electrical|bulb|fused|flickering|lights not|machine|washing|dryer|pump|pest|mold|mould|damp|door\b|lock\b|handle\b|hinge|ceiling|crack|cracked|loose|falling|fell|odour|odor|smell|stench|ventilation|locker|shower|washroom|toilet|steam|\bac\b|app crash|login issue|website down/;
+    const existingCategory = cleanString(effectiveBodyContext.category);
+    const physicalOnlyCategoryNames = new Set([
+      'Repair and Maintenance', 'Studio Amenities and Facilities', 'Facility & Equipment',
+      'Operating Systems', 'Tech Issues', 'App & Digital',
+    ]);
+    const isPhysicalIssue = physicalIssueKeywords.test(rawLower) || physicalOnlyCategoryNames.has(existingCategory);
+
+    // For physical issues: a short initial report is NOT a complete description.
+    // Clear it so the AI is forced to ask for proper operational detail.
+    // A "complete" description for a physical issue is multi-sentence (>80 chars with punctuation,
+    // or >120 chars, or contains a newline indicating structured detail).
+    if (isPhysicalIssue && cleanString(effectiveBodyContext.description) && !isFormSubmission) {
+      const existingDesc = cleanString(effectiveBodyContext.description);
+      const isBriefReport = existingDesc.length < 80 && !/[.!?]\s/.test(existingDesc) && !existingDesc.includes('\n');
+      if (isBriefReport) {
+        effectiveBodyContext.description = '';
+      }
+    }
+
+    // For non-physical issues (or physical with no description yet), auto-populate from the
+    // user's message if the context doesn't have one. This prevents the description field from
+    // appearing as required when the user already stated their issue in text.
+    if (!cleanString(effectiveBodyContext.description) && rawIssueText.length > 8 && !isFormSubmission) {
+      // For physical issues: only auto-populate if the message is already detailed (>100 chars
+      // with sentence structure), otherwise leave blank so the AI collects proper detail.
+      const isDetailedReport = rawIssueText.length > 100 || (/[.!?]\s/.test(rawIssueText) && rawIssueText.length > 60);
+      if (!isPhysicalIssue || isDetailedReport) {
+        effectiveBodyContext.description = rawIssueText;
+      }
+    }
+
+    const bodyWithEffectiveContext = { ...body, context: effectiveBodyContext };
+    const aiResponse = await askAiForIntake(bodyWithEffectiveContext, instructions);
 
     if (aiResponse) {
-      const aiContext = { ...(body.context || {}), ...(aiResponse.inferredContext || {}) };
-      const guardedMissingFields = needsStructuredDetails(latestUserMessage, aiContext);
-      const needsMoreInfo = aiResponse.needsMoreInfo || guardedMissingFields.length > 0;
+      const aiContext = { ...effectiveBodyContext, ...(aiResponse.inferredContext || {}) };
+      const guardedMissingFields = requiredFieldsForIssue(latestUserMessage, aiContext);
+
+      // Filter the AI's proposed form: remove entity fields (member/class) that the
+      // business-logic guard did not flag as required for this specific incident.
+      const filteredAiForm = filterAiDetailFormFields(aiResponse.detailForm, guardedMissingFields);
+
+      const needsMoreInfo = aiResponse.needsMoreInfo || filteredAiForm !== null || guardedMissingFields.length > 0;
       const aiTicket = needsMoreInfo ? null : aiResponse.ticket || fallbackDraft(messages, aiContext);
       return json({
         conversationId: body.conversationId || crypto.randomUUID(),
         promptProfile: instructions.includes('Athena') ? 'athena-ai-dynamic' : 'custom-ai-dynamic',
         needsMoreInfo,
-        reply: needsMoreInfo && !aiResponse.detailForm
+        reply: needsMoreInfo && !filteredAiForm
           ? 'I need a few details before drafting this ticket. Please complete the form below.'
           : aiResponse.reply,
-        detailForm: aiResponse.detailForm || (guardedMissingFields.length > 0
+        detailForm: filteredAiForm || (guardedMissingFields.length > 0
           ? {
               title: 'Complete ticket intake details',
               description: 'Athena inferred the classification and needs these details before drafting.',
@@ -953,9 +1206,9 @@ Deno.serve(async (request) => {
       });
     }
 
-    const inferredContext = inferContextFromText(latestUserMessage, body.context || {});
-    const effectiveContext = { ...(body.context || {}), ...inferredContext };
-    const missingFields = needsStructuredDetails(latestUserMessage, effectiveContext);
+    const inferredContext = inferContextFromText(latestUserMessage, effectiveBodyContext);
+    const effectiveContext = { ...effectiveBodyContext, ...inferredContext };
+    const missingFields = requiredFieldsForIssue(latestUserMessage, effectiveContext);
     if (missingFields.length > 0) {
       return json({
         conversationId: body.conversationId || crypto.randomUUID(),
@@ -979,6 +1232,35 @@ Deno.serve(async (request) => {
     }
 
     const draft = fallbackDraft(messages, effectiveContext);
+    const draftMissingFields = requiredFieldsForIssue(latestUserMessage, {
+      ...effectiveContext,
+      ...draft,
+      category: draft.category,
+      subCategory: draft.subCategory,
+      studio: draft.studio,
+      description: draft.description || (effectiveContext as Record<string, unknown>).description,
+    });
+    if (draftMissingFields.length > 0) {
+      return json({
+        conversationId: body.conversationId || crypto.randomUUID(),
+        promptProfile: instructions.includes('Athena') ? 'athena-v2-incomplete' : 'custom-incomplete',
+        needsMoreInfo: true,
+        reply: 'Almost there — I need a couple more details before drafting this ticket.',
+        detailForm: {
+          title: 'Complete ticket intake details',
+          description: 'Athena inferred the classification and needs these remaining details.',
+          fields: Array.from(new Set(draftMissingFields)),
+          submitLabel: 'Continue drafting ticket',
+        },
+        suggestedChips: [],
+        inferredContext,
+        missingFields: draftMissingFields,
+        publishable: false,
+        urgencyReason: inferredContext.priority
+          ? `Fallback priority inferred as ${inferredContext.priority} from the documented member voice.`
+          : '',
+      });
+    }
     return json({
       conversationId: body.conversationId || crypto.randomUUID(),
       promptProfile: instructions.includes('Athena') ? 'athena-v2' : 'custom',

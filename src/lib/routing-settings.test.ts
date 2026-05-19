@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 const backendMocks = vi.hoisted(() => ({
-  upsert: vi.fn(async () => ({ error: null })),
+  upsert: vi.fn(async (_table: string, _rows: Record<string, unknown>[], _options?: Record<string, unknown>) => ({ error: null })),
   selectOrder: vi.fn(async () => ({ data: [], error: null })),
 }));
 

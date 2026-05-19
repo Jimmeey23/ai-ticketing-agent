@@ -89,7 +89,7 @@ function inferCity(value?: string): string {
   return '';
 }
 
-function selectedIncludes<T extends string>(selected: T[] | string[], value: string): boolean {
+function selectedIncludes(selected: string[], value: string): boolean {
   return selected.length === 0 || selected.includes(value);
 }
 

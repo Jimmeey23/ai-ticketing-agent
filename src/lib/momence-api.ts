@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { backendSupabase } from './backend-supabase';
 
 const MOMENCE_BASE_URL = 'https://api.momence.com/api/v2';
 const DEFAULT_PAGE_SIZE = 20;
@@ -260,7 +260,7 @@ async function callMomence<T>(path: string, options: MomenceRequestOptions = {})
     return parseResponse<T>(response);
   }
 
-  const { data, error } = await supabase.functions.invoke('momence-search', {
+  const { data, error } = await backendSupabase.functions.invoke('momence-search', {
     body: { path, method, params, body: options.body },
   });
   if (error) throw error;
@@ -325,7 +325,7 @@ export async function searchMomenceSessions(query: string): Promise<MomenceSessi
         futureDays: SESSION_LOOKAHEAD_DAYS,
         pageSize: 200,
         includeCancelled: false,
-        types: [SESSION_SEARCH_TYPE],
+        types: SESSION_SEARCH_TYPE,
       }),
     });
     if (!raw.ok) {
@@ -341,7 +341,7 @@ export async function searchMomenceSessions(query: string): Promise<MomenceSessi
         sortBy: 'startsAt',
         sortOrder: 'DESC',
         includeCancelled: false,
-        types: [SESSION_SEARCH_TYPE],
+        types: SESSION_SEARCH_TYPE,
         startAfter: lookback.toISOString(),
         startBefore: lookahead.toISOString(),
       },

@@ -118,10 +118,13 @@ export const ASSOCIATES = [
   { name: 'Pujal Jathar', role: 'Sr. Finance & Accounts Executive', team: 'Accounts', email: 'pujal@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Sachin Nalawade' },
   { name: 'Rasika Kalambe', role: 'Accounts Executive', team: 'Accounts', email: 'rasika@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Sachin Nalawade' },
   { name: 'Sashi Singh', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'sashi@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Shifa Ali' },
+  { name: 'Reyna', role: 'Marketing Lead', team: 'Marketing', email: '', location: 'Physique 57, Mumbai', manager: 'Mitali Kumar' },
   { name: 'Deesha Changwani', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'deesha@physique57mumbai.com', location: 'Physique 57, Bandra', manager: 'Jimmeey Gondaa' },
   { name: 'Vahishta Fitter', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'vahishta@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Jimmeey Gondaa' },
   { name: 'Nadiya Shaikh', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'nadiya@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Jimmeey Gondaa' },
   { name: 'Saachi Shetty', role: 'Marketing Lead', team: 'Marketing', email: 'saachi.s@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Shifa Ali' },
+  { name: 'Saachi Jr.', role: 'Marketing Associate', team: 'Marketing', email: '', location: 'Physique 57, Bengaluru', manager: 'Reyna' },
+  { name: 'Jhanvi', role: 'Social Media', team: 'Marketing', email: '', location: 'Physique 57, Mumbai', manager: 'Reyna' },
   { name: 'Zaheer Agarbattiwala', role: 'Sales & Client Servicing Associate', team: 'Sales & Client Servicing', email: 'zaheer@physique57mumbai.com', location: 'Physique 57, Mumbai', manager: 'Jimmeey Gondaa' },
   { name: 'Nunu Yeptomi', role: 'CSA', team: 'Customer Service', email: 'nunu@physique57bengaluru.com', location: 'Physique 57, Bengaluru', manager: 'Shifa Ali' },
   { name: 'Sachin Nalawade', role: 'Accounts Assistant', team: 'Accounts', email: 'sachin@physique57mumbai.com', location: 'Physique 57, India', manager: 'Mitali Kumar' },
@@ -804,34 +807,3 @@ export function getTicketGroupValue(ticket: Ticket, groupBy: string, now = Date.
   if (groupBy === 'member') return ticket.memberName || 'No member linked';
   return 'All tickets';
 }
-
-export const QUICK_TEMPLATES = [
-  {
-    id: 'starter-member-concern',
-    icon: 'CalendarClock',
-    title: 'Member concern',
-    color: 'from-stone-800 to-stone-950',
-    prompt: 'Member reported: ',
-  },
-  {
-    id: 'starter-service-issue',
-    icon: 'ShieldAlert',
-    title: 'Service issue',
-    color: 'from-blue-600 to-indigo-700',
-    prompt: 'Member said there was an issue with ',
-  },
-  {
-    id: 'starter-member-feedback',
-    icon: 'MessageSquareHeart',
-    title: 'Member feedback',
-    color: 'from-amber-700 to-stone-950',
-    prompt: 'Member shared feedback that ',
-  },
-  {
-    id: 'starter-ops-observation',
-    icon: 'Building2',
-    title: 'Ops observation',
-    color: 'from-zinc-700 to-stone-950',
-    prompt: 'Team observed that ',
-  },
-];

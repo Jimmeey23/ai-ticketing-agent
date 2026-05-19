@@ -1,11 +1,11 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
-import { Send, Sparkles, CheckCircle2, Paperclip, X, Mic, Square } from 'lucide-react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { ticketingFunctionsSupabase } from '@/lib/backend-supabase';
+import { Send, Sparkles, CheckCircle2, Paperclip, X, Mic, Square, ChevronDown, Check } from 'lucide-react';
 import InteractiveRobotSpline from '@/components/InteractiveRobotSpline';
 import { ROBOT_SPLINE_URL } from '@/lib/galleryImages';
 import { TicketPreviewCard } from './TicketPreviewCard';
 import { ContextPicker, Context } from './ContextPicker';
-import { useTickets } from './TicketContext';
+import { useTickets } from './useTickets';
 import { useBackendAuth } from '@/contexts/BackendAuthContext';
 import { RoutingSettings, defaultRoutingSettings, loadRoutingSettings } from '@/lib/routing-settings';
 import {
@@ -18,8 +18,10 @@ import {
 } from '@/lib/momence-api';
 import {
   captureMemberVoiceFromText,
+  getIntakeFieldDefinition,
   getMissingIntakeFields,
   inferIntakeContextFromText,
+  isProtectedEntityField,
   isMissingIntakeValue,
   IntakeContext,
 } from '@/lib/intake-rules';
@@ -203,35 +205,57 @@ function getReporterName(user: ReturnType<typeof useBackendAuth>['user']): strin
 const ATHENA_SYSTEM_PROMPT = `
 You are Athena, the Physique 57 India internal operations ticket intake assistant.
 
-Primary behavior:
-- Start from the internal team member's free-text documentation of member voice.
-- Infer exactly one route: Request, Complaint, Feedback, or Internal Reporting.
-- Infer the best category and subcategory from the approved master data. Do not require the user to manually select them before asking issue-specific details.
-- Infer priority and include a short urgency reason based on member impact, safety risk, retention risk, billing urgency, and escalation language.
-- Ask only for operational details that are missing after inference and are relevant to the described incident.
-- Wherever possible, ask using a direct question plus selectable button options instead of open text.
-- Never create or return a ticket draft with partial information. Gather missing required fields first.
-- Never ask multiple questions as prose. If more than one field is missing, return a structured detailForm with complete field objects.
-- The AI must dynamically decide issue-specific fields from the described incident, inferred route, category, subcategory, and current context. Do not rely on fixed subcategory templates or static incident question sets.
-- For issue-specific fields, return full field definitions: id, label, type, required, and incident-specific options when useful.
-- Always populate inferredContext with category, subCategory, intakeRoute, and priority once inferred, even when asking for more details.
-- Before returning any detailForm, decide which context fields are actually required for this specific incident; omit unrelated Momence member, session, class, and trainer fields.
-- Ask for member, session, class, or trainer details only when the described incident actually requires them. Do not include selected/stale member, session, class, or trainer context in the draft unless it is relevant to the ticket.
-- Use only the application-provided constants for routes, studios, instructors, class types, categories, subcategories, associates, priorities, and option buttons.
-- Use admin-provided routing settings when present. Do not invent owners, departments, SLAs, escalation paths, locations, or employee names.
-- Ticket titles should include the most specific issue plus member/session/studio context when known, for example "AC malfunction in Studio 1 - Kwality House" or "Hosted class feedback - Ahana Power Cycle".
-- Member name/contact and class/session context must come from Momence search fields in the UI; do not ask users to type those as ordinary text when a form is used.
-- For freeze, rollover, membership, and package-specific requests, require the selected Momence member before requesting membership, and use only that member's currently active memberships.
-- Always write in third-person internal documentation language: "Member reported...", "Client requested...", "Community member stated...".
-- Use a few relevant emojis where appropriate (for example: ✅ 📌 📅 ⚠️), but keep responses professional and avoid overuse.
-- Always return draftOnly behavior until the user explicitly approves the displayed draft.
+YOUR GOAL: Turn a staff member's initial report into a complete, actionable ticket — one the assigned owner can act on immediately without asking a single follow-up question.
 
-Required ticket draft quality:
-- Title: concise operational summary, not a raw transcript.
-- Description: factual member voice, stated impact, requested resolution, and immediate context.
-- Category/subCategory: match the app's category constants.
-- Priority: Critical for safety/security, High for urgent service failure, otherwise Medium/Low based on stated impact.
-- Tags: include route and meaningful operational tags.
+HOW TO DECIDE WHAT TO ASK:
+Read the initial report and ask yourself: what would the person assigned this ticket need to know to act?
+Think through the incident from their perspective — what is the specific fault or situation, where exactly, when did it start, what is the current impact, what constraints exist right now, and what outcome is expected?
+Identify what is missing from the initial report and collect only that — in a single structured form.
+
+Do not use a fixed list of fields. Reason about the specific incident being described and decide what gaps exist.
+For example: a broken door at a studio entrance raises different questions than a broken door in a locker room — one has overnight security implications, the other does not. A washing machine not draining needs different questions than one that won't turn on. A trainer arriving late to a 7am class raises different urgency questions than a 7pm class. Think contextually.
+
+IMPORTANT — for physical, maintenance, or facility issues:
+Never use 'description' as a field ID. Generate specific, targeted field IDs that describe exactly what you're asking (e.g. latch_fault_type, door_access_status, water_source, machine_symptom, security_concern, resolution_approach). The first form must collect the full operational picture — fault specifics, current access or safety implications, and the expected resolution — all in one go. Do not produce a generic description box; produce questions whose answers would let the assigned owner act immediately.
+
+FORM DESIGN RULES:
+- Collect all missing information in ONE detailForm — do not spread it across multiple rounds when the gaps are knowable upfront
+- Field labels must describe exactly what you're asking, specific to this incident — not generic
+- For bounded answer spaces, use select with options tailored to the situation
+- For open descriptions, use textarea with a placeholder hint that reflects the item being reported
+- Use datetime-local for timestamps, date for date-only, number for counts
+- Field IDs must be snake_case and self-describing (e.g. door_fault_type, current_access_situation)
+- Never ask for reportedBy — the frontend supplies it from the signed-in user
+
+WHEN TO DRAFT IMMEDIATELY vs WHEN TO ASK FIRST:
+Draft immediately only if the initial report already contains everything the assigned owner needs.
+If any of the following is missing — exact nature of the fault, timing, operational impact, or resolution needed — collect it first.
+A one-sentence report is rarely enough to draft from. Probe before drafting.
+
+INTAKE INFERENCE:
+- Infer exactly one intake route: Request, Complaint, Feedback, or Internal Reporting
+- Infer the best category and subcategory from approved master data — do not require manual selection
+- Infer priority with a short urgency reason
+- Always populate inferredContext with category, subCategory, intakeRoute, and priority once inferred, even while asking for more details
+
+ENTITY FIELDS — memberName, memberContact, classType, classDateTime, trainer, sessionId, membership:
+These fields refer to a specific named person or class booking in Momence. Include them ONLY when the incident is directly about or requires one.
+Ask yourself: does resolving this issue require knowing who a specific member is, or which specific class booking it relates to?
+If the answer is no — do not include entity fields.
+Issues that never need entity fields: anything physical (door, machine, AC, plumbing, lighting, pest), ambient environment, tech/ops systems, app or Wi-Fi issues.
+Issues that need entity fields: a named member's billing request, a freeze or rollover for a specific person, a complaint about how a trainer treated a named member in a specific class.
+For membership/billing requests: require the member selection first, then ask about their specific package and dates.
+
+ROUTING AND MASTER DATA:
+- Use only approved master-data values for studios, trainers, class types, categories, subcategories, priorities, and associates
+- Use provided routingRules, employees, departments, and locations as authoritative — never invent names, escalation paths, or SLAs
+- Member and class/session fields must use Momence-powered UI pickers, not plain text inputs
+
+TICKET QUALITY:
+- Title: specific operational summary — name the exact item, area, studio, or person. Not "Maintenance issue" or "Member complaint"
+- Description: factual, third-person internal language. What was reported, what the impact is, what resolution is expected
+- Priority: Critical for safety or access risk, High for service failure affecting classes, Medium for operational issues, Low for cosmetic or deferred items
+- Ticket creation happens only after explicit user approval of the displayed draft
 `.trim();
 
 const DETAIL_FORM_FIELD_LIBRARY: Record<string, DetailFormField> = {
@@ -311,7 +335,7 @@ const DETAIL_FORM_FIELD_LIBRARY: Record<string, DetailFormField> = {
   },
   description: {
     id: 'description',
-    label: "Member's stated feedback",
+    label: 'Describe the issue in detail',
     type: 'textarea',
     required: true,
   },
@@ -406,7 +430,7 @@ const DETAIL_FORM_FIELD_LIBRARY: Record<string, DetailFormField> = {
 };
 
 function getDetailField(id: string): DetailFormField | undefined {
-  return DETAIL_FORM_FIELD_LIBRARY[id];
+  return DETAIL_FORM_FIELD_LIBRARY[id] || getIntakeFieldDefinition(id);
 }
 
 function normalizeDetailForm(input: unknown): DetailForm | null {
@@ -428,12 +452,23 @@ function normalizeDetailForm(input: unknown): DetailForm | null {
       if (seen.has(id)) return null;
       seen.add(id);
       if (base) {
+        // AI-provided label and options take priority over library defaults.
+        // This lets the AI give contextual, issue-specific labels to known fields
+        // (e.g. 'description' can be labelled "What is wrong with the latch?" instead
+        // of the generic library label "Member's stated feedback").
+        const aiLabel = typeof (field as Partial<DetailFormField>).label === 'string' && (field as Partial<DetailFormField>).label!.trim()
+          ? (field as Partial<DetailFormField>).label!.trim()
+          : null;
+        const rawAiOptions = (field as Partial<DetailFormField>).options;
+        const aiOptions = Array.isArray(rawAiOptions) && rawAiOptions.length > 0
+          ? rawAiOptions.map(String).filter(Boolean).slice(0, 30)
+          : null;
         return {
           ...base,
           ...field,
           id: base.id,
-          label: base.label,
-          options: base.options,
+          label: aiLabel || base.label,
+          options: aiOptions || base.options,
         } as DetailFormField;
       }
 
@@ -550,6 +585,37 @@ function pruneDetailForm(form: DetailForm | null, ctx: DetailContext): DetailFor
   return { ...form, fields };
 }
 
+function filterAiDetailForm(form: DetailForm | null, ctx: DetailContext, requiredFields: Set<string>): DetailForm | null {
+  if (!form) return null;
+  const fields = form.fields.filter((field) => {
+    if (field.id === 'reportedBy') return false;
+    if (field.id === 'description' && requiredFields.size > 0 && !requiredFields.has('description')) return false;
+    if (!isProtectedEntityField(field.id)) return true;
+    return requiredFields.has(field.id);
+  });
+
+  if (fields.length === 0) return null;
+  return { ...form, fields };
+}
+
+function mergeDetailForms(primary: DetailForm | null, secondary: DetailForm | null): DetailForm | null {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  const seen = new Set<string>();
+  const fields = [...primary.fields, ...secondary.fields].filter((field) => {
+    if (seen.has(field.id)) return false;
+    seen.add(field.id);
+    return true;
+  });
+
+  return {
+    ...primary,
+    description: primary.description || secondary.description,
+    fields,
+    submitLabel: primary.submitLabel || secondary.submitLabel,
+  };
+}
+
 function detailFormFromQuestionText(text: string, ctx: DetailContext): DetailForm | null {
   const questionLines = text
     .split('\n')
@@ -663,6 +729,7 @@ const SESSION_ENTITY_KEYS = ['sessionId', 'classType', 'classDateTime', 'trainer
 function shouldCarryMemberContext(issueText: string, ctx: DetailContext): boolean {
   const value = [
     issueText,
+    ctx.initialReport,
     ctx.category,
     ctx.subCategory,
     ctx.requestType,
@@ -674,6 +741,7 @@ function shouldCarryMemberContext(issueText: string, ctx: DetailContext): boolea
 function shouldCarrySessionContext(issueText: string, ctx: DetailContext): boolean {
   const value = [
     issueText,
+    ctx.initialReport,
     ctx.category,
     ctx.subCategory,
     ctx.requestType,
@@ -1122,7 +1190,7 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
 
   const sendMessage = async (text: string, contextOverride?: DetailContext) => {
     if (!text.trim() || loading) return;
-    let activeContext = { ...(contextOverride || context), reportedBy: reporterName };
+    let activeContext: DetailContext = { ...(contextOverride || context), reportedBy: reporterName };
     if (!contextOverride && pendingSingleField && pendingSingleField.type !== 'select') {
       activeContext = applyDetailValue(context, pendingSingleField.id, text.trim());
       activeContext.reportedBy = reporterName;
@@ -1139,6 +1207,9 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
       setContext(activeContext);
     }
     const issueText = capturedVoice || text;
+    if (!activeContext.initialReport && !/^here are the missing details:/i.test(text.trim())) {
+      activeContext = { ...activeContext, initialReport: issueText };
+    }
     const localInference = inferIntakeContextFromText(issueText, activeContext);
     if (Object.keys(localInference).length > 0) {
       activeContext = { ...activeContext, ...localInference, reportedBy: reporterName };
@@ -1189,7 +1260,7 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
         };
       }
 
-      const { data, error } = await supabase.functions.invoke<AiIntakeResponse>('ticket-ai-chat', {
+      const { data, error } = await ticketingFunctionsSupabase.functions.invoke<AiIntakeResponse>('ticket-ai-chat', {
         body: {
           action: 'draftTicket',
           draftOnly: true,
@@ -1217,6 +1288,12 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
           messages: apiMessages,
           conversationId,
           context: activeContext,
+          intakeContract: {
+            missingFields: requiredFieldsForIssue(activeContext),
+            fields: requiredFieldsForIssue(activeContext)
+              .map((id) => getDetailField(id))
+              .filter(Boolean),
+          },
         },
       });
 
@@ -1235,15 +1312,23 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
         setContext(responseContext);
       }
 
+      const remainingMissingFields = requiredFieldsForIssue(responseContext, data?.ticket || undefined);
+      const requiredFieldSet = new Set(remainingMissingFields);
       const incompleteDraftForm = pruneDetailForm(detailFormForIncompleteDraft(data?.ticket, responseContext), responseContext);
-      const normalizedForm = pruneDetailForm(normalizeDetailForm(data?.detailForm), responseContext);
       const localMissingForm = pruneDetailForm(detailFormForContext(responseContext), responseContext);
-      const detailForm = normalizedForm || incompleteDraftForm || localMissingForm;
+      const deterministicForm = incompleteDraftForm || localMissingForm;
+      const normalizedForm = pruneDetailForm(
+        filterAiDetailForm(normalizeDetailForm(data?.detailForm), responseContext, requiredFieldSet),
+        responseContext
+      );
+      const detailForm = mergeDetailForms(deterministicForm, normalizedForm);
       const parsedQuestionForm = !detailForm && !data?.ticket
-        ? pruneDetailForm(detailFormFromQuestionText(data?.reply || '', responseContext), responseContext)
+        ? pruneDetailForm(
+            filterAiDetailForm(detailFormFromQuestionText(data?.reply || '', responseContext), responseContext, requiredFieldSet),
+            responseContext
+          )
         : null;
       const finalDetailForm = detailForm || parsedQuestionForm;
-      const remainingMissingFields = requiredFieldsForIssue(responseContext, data?.ticket || undefined);
       let ticket = finalDetailForm || data?.needsMoreInfo || remainingMissingFields.length > 0
         ? null
         : data?.ticket || buildClientDraft(responseContext, text);
@@ -1317,7 +1402,7 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
     sendMessage(`${getDetailField(chip.field)?.label || chip.field}: ${chip.value}`, next);
   };
 
-  const resetChat = () => {
+  const resetChat = useCallback(() => {
     activeChatEpochRef.current += 1;
     requestNonceRef.current += 1;
     voiceSessionActiveRef.current = false;
@@ -1333,13 +1418,13 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
     setPendingAttachments([]);
     setConversationId(null);
     setLoading(false);
-  };
+  }, [reporterName]);
 
   useEffect(() => {
     if (resetVersion === lastResetVersionRef.current) return;
     lastResetVersionRef.current = resetVersion;
     resetChat();
-  }, [resetVersion, reporterName]);
+  }, [resetVersion, resetChat]);
 
   const submitDetailForm = (values: Record<string, string>, form?: DetailForm) => {
     const formFieldIds = new Set((form?.fields || []).map((field) => String(field.id)));
@@ -1920,7 +2005,7 @@ const DetailCaptureForm: React.FC<{
 
   return (
     <form
-      className="mt-3 w-full overflow-hidden rounded-3xl border border-slate-200 bg-white/95 shadow-[0_22px_70px_rgba(15,23,42,0.1)] backdrop-blur"
+      className="mt-3 w-full overflow-visible rounded-3xl border border-slate-200 bg-white/95 shadow-[0_22px_70px_rgba(15,23,42,0.1)] backdrop-blur"
       onSubmit={(event) => {
         event.preventDefault();
         if (canSubmit) onSubmit(values, form);
@@ -1996,9 +2081,9 @@ const DetailCaptureForm: React.FC<{
                   : field.options || [];
 
           return (
-            <label
+            <div
               key={id}
-              className={`group rounded-2xl border border-slate-200 bg-white p-3 transition duration-200 focus-within:border-rose-500 focus-within:ring-4 focus-within:ring-rose-500/10 ${field.type === 'textarea' ? 'md:col-span-2' : ''}`}
+              className={`group relative rounded-2xl border border-slate-200 bg-white p-3 transition duration-200 focus-within:border-rose-500 focus-within:ring-4 focus-within:ring-rose-500/10 ${field.type === 'textarea' ? 'md:col-span-2' : ''}`}
             >
               <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.14em] text-stone-500">
                 {field.label}
@@ -2008,31 +2093,32 @@ const DetailCaptureForm: React.FC<{
                 (() => {
                   const forceSingle = new Set(['intakeRoute', 'category', 'subCategory', 'priority', 'studio', 'memberSentiment']);
                   const isMulti = !forceSingle.has(field.id);
-                  const selectedValues = isMulti ? toCsvList(values[id]) : [];
-                  return (
+                  return isMulti ? (
+                    <MultiSelectDropdown
+                      value={values[id] || ''}
+                      options={options}
+                      placeholder={
+                        field.id === 'membership' && !values.memberId
+                          ? 'Select a Momence member first'
+                          : `Select ${field.label.toLowerCase()}`
+                      }
+                      disabled={field.id === 'membership' && !values.memberId}
+                      onChange={(nextValue) => setValue(id, nextValue)}
+                    />
+                  ) : (
                 <select
-                  value={isMulti ? selectedValues : (values[id] || '')}
-                  multiple={isMulti}
-                  onChange={(event) => {
-                    if (isMulti) {
-                      const picked = Array.from(event.currentTarget.selectedOptions).map((option) => option.value).filter(Boolean);
-                      setValue(id, picked.join(' | '));
-                    } else {
-                      setValue(id, event.target.value);
-                    }
-                  }}
+                  value={values[id] || ''}
+                  onChange={(event) => setValue(id, event.target.value)}
                   disabled={(field.id === 'membership' && !values.memberId) || (field.id === 'subCategory' && !values.category)}
-                  className={`${isMulti ? 'min-h-[120px] py-2' : 'h-11'} w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400`}
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400"
                 >
-                  {!isMulti && (
-                    <option value="">
-                      {field.id === 'membership' && !values.memberId
-                        ? 'Select a Momence member first'
-                        : field.id === 'subCategory' && !values.category
-                          ? 'Select category first'
-                        : `Select ${field.label.toLowerCase()}`}
-                    </option>
-                  )}
+                  <option value="">
+                    {field.id === 'membership' && !values.memberId
+                      ? 'Select a Momence member first'
+                      : field.id === 'subCategory' && !values.category
+                        ? 'Select category first'
+                      : `Select ${field.label.toLowerCase()}`}
+                  </option>
                   {options.map((option) => (
                     <option key={option} value={option}>{option}</option>
                   ))}
@@ -2056,7 +2142,7 @@ const DetailCaptureForm: React.FC<{
                   placeholder={field.label}
                 />
               )}
-            </label>
+            </div>
           );
         })}
       </div>
@@ -2073,6 +2159,109 @@ const DetailCaptureForm: React.FC<{
         </button>
       </div>
     </form>
+  );
+};
+
+const MultiSelectDropdown: React.FC<{
+  value: string;
+  options: string[];
+  placeholder: string;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}> = ({ value, options, placeholder, disabled = false, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selectedValues = useMemo(
+    () => value.split('|').map((item) => item.trim()).filter(Boolean),
+    [value]
+  );
+  const selectedSet = useMemo(() => new Set(selectedValues), [selectedValues]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  const updateValues = (nextValues: string[]) => {
+    onChange(nextValues.join(' | '));
+  };
+
+  const toggleOption = (option: string) => {
+    if (selectedSet.has(option)) {
+      updateValues(selectedValues.filter((item) => item !== option));
+      return;
+    }
+    updateValues([...selectedValues, option]);
+  };
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+        className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm text-stone-900 outline-none transition focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400"
+      >
+        <span className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+          {selectedValues.length ? selectedValues.slice(0, 3).map((item) => (
+            <span
+              key={item}
+              className="max-w-[180px] truncate rounded-full border border-rose-100 bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-800"
+            >
+              {item}
+            </span>
+          )) : (
+            <span className="truncate text-slate-400">{placeholder}</span>
+          )}
+          {selectedValues.length > 3 && (
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+              +{selectedValues.length - 3}
+            </span>
+          )}
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && !disabled && (
+        <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_18px_44px_rgba(15,23,42,0.14)]">
+          {options.length ? options.map((option) => {
+            const selected = selectedSet.has(option);
+            return (
+              <button
+                key={option}
+                type="button"
+                onClick={() => toggleOption(option)}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition ${
+                  selected ? 'bg-rose-50 text-rose-900' : 'text-stone-700 hover:bg-slate-50'
+                }`}
+              >
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                    selected ? 'border-rose-600 bg-rose-600 text-white' : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  {selected && <Check className="h-3 w-3" />}
+                </span>
+                <span className="min-w-0 flex-1 break-words">{option}</span>
+              </button>
+            );
+          }) : (
+            <div className="px-2.5 py-2 text-xs text-slate-400">No options available</div>
+          )}
+        </div>
+      )}
+    </div>
   );
 };
 
