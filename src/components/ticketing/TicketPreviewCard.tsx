@@ -15,6 +15,8 @@ interface DraftTicket {
   memberName?: string | null;
   memberContact?: string | null;
   reportedBy?: string | null;
+  assignedTo?: string | null;
+  department?: string | null;
   tags: string[];
   sentiment?: string;
   conversationSummary?: string;
@@ -24,13 +26,16 @@ interface Props {
   draft: DraftTicket;
   onConfirm: () => void;
   onEdit: () => void;
+  onDiscard?: () => void;
   onSaveEdit?: (draft: DraftTicket) => void;
   confirmed?: boolean;
   ticketId?: string;
+  publishing?: boolean;
 }
 
-export const TicketPreviewCard: React.FC<Props> = ({ draft, onConfirm, onEdit, onSaveEdit, confirmed, ticketId }) => {
+export const TicketPreviewCard: React.FC<Props> = ({ draft, onConfirm, onEdit, onDiscard, onSaveEdit, confirmed, ticketId, publishing = false }) => {
   const priorityMeta = PRIORITY_SLA[draft.priority];
+  const slaHours = PRIORITY_SLA[draft.priority]?.hours ?? PRIORITY_SLA.Medium.hours;
   const [editing, setEditing] = useState(false);
   const [editedDraft, setEditedDraft] = useState<DraftTicket>(draft);
 
@@ -121,6 +126,9 @@ export const TicketPreviewCard: React.FC<Props> = ({ draft, onConfirm, onEdit, o
             <EditInput label="Signature experience" value={editedDraft.classType || ''} onChange={(value) => updateEditedDraft('classType', value)} />
             <EditInput label="Community member" value={editedDraft.memberName || ''} onChange={(value) => updateEditedDraft('memberName', value)} />
             <EditInput label="Member contact" value={editedDraft.memberContact || ''} onChange={(value) => updateEditedDraft('memberContact', value)} />
+            <EditInput label="Documented by" value={editedDraft.reportedBy || ''} onChange={(value) => updateEditedDraft('reportedBy', value)} />
+            <EditInput label="Owner" value={editedDraft.assignedTo || ''} onChange={(value) => updateEditedDraft('assignedTo', value)} />
+            <EditInput label="Department" value={editedDraft.department || ''} onChange={(value) => updateEditedDraft('department', value)} />
           </div>
         </div>
       ) : (
@@ -135,7 +143,10 @@ export const TicketPreviewCard: React.FC<Props> = ({ draft, onConfirm, onEdit, o
         {draft.trainer && <Row icon={<User className="h-3 w-3" />} label="Instructor" value={draft.trainer} />}
         {draft.classType && <Row icon={<Calendar className="h-3 w-3" />} label="Signature experience" value={draft.classType} />}
         {draft.classDateTime && <Row icon={<Clock className="h-3 w-3" />} label="Session time" value={new Date(draft.classDateTime).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} />}
-        {draft.reportedBy && <Row icon={<ShieldCheck className="h-3 w-3" />} label="Documented by" value={draft.reportedBy} />}
+        <Row icon={<ShieldCheck className="h-3 w-3" />} label="Documented by" value={draft.reportedBy || 'Auto-assigned'} />
+        <Row icon={<User className="h-3 w-3" />} label="Owner" value={draft.assignedTo || 'Auto-routed'} />
+        <Row icon={<Tag className="h-3 w-3" />} label="Department" value={draft.department || 'Auto-routed'} />
+        <Row icon={<Clock className="h-3 w-3" />} label="SLA target" value={`${slaHours} hour${slaHours === 1 ? '' : 's'} from publish`} />
       </div>
 
       {draft.tags.length > 0 && (
@@ -180,9 +191,16 @@ export const TicketPreviewCard: React.FC<Props> = ({ draft, onConfirm, onEdit, o
             <>
               <button
                 onClick={onConfirm}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-stone-950 py-2.5 text-xs font-semibold text-white shadow-[0_16px_34px_rgba(15,23,42,0.18)] transition-all hover:-translate-y-0.5 hover:bg-stone-800 hover:shadow-[0_20px_42px_rgba(15,23,42,0.22)]"
+                disabled={publishing}
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-stone-950 py-2.5 text-xs font-semibold text-white shadow-[0_16px_34px_rgba(15,23,42,0.18)] transition-all hover:-translate-y-0.5 hover:bg-stone-800 hover:shadow-[0_20px_42px_rgba(15,23,42,0.22)] disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0 disabled:hover:bg-stone-950 disabled:hover:shadow-[0_16px_34px_rgba(15,23,42,0.18)]"
               >
-                <Check className="w-3.5 h-3.5" /> Publish ticket
+                <Check className="w-3.5 h-3.5" /> {publishing ? 'Publishing...' : 'Publish ticket'}
+              </button>
+              <button
+                onClick={onDiscard}
+                className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-stone-700 transition hover:-translate-y-0.5 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+              >
+                Discard draft
               </button>
               <button
                 onClick={() => {

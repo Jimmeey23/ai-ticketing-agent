@@ -1,12 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { Ticket, PRIORITY_SLA, STATUSES, ASSOCIATES, CATEGORIES, STUDIOS, CLASS_TYPES, TRAINERS, getEscalationTarget } from '@/lib/ticketing-data';
 import { TicketStatusUpdateInput, useTickets } from './TicketContext';
-import { X, Clock, MapPin, User, Calendar, Tag, MessageSquare, Phone, Lock, Pencil, Save, Trash2 } from 'lucide-react';
+import { X, Clock, MapPin, User, Calendar, Tag, MessageSquare, Phone, Lock, Pencil, Save, Trash2, Link2 } from 'lucide-react';
 import { MomenceAutomationPanel } from './MomenceAutomationPanel';
 
 interface Props {
   ticket: Ticket | null;
   onClose: () => void;
+}
+
+interface TicketAttachmentRecord {
+  path?: string;
+  fileName?: string;
+  contentType?: string;
+  size?: number;
+  publicUrl?: string;
+  uploadedAt?: string;
+}
+
+function readTicketAttachments(ticket: Ticket): TicketAttachmentRecord[] {
+  const raw = (ticket.metadata as Record<string, unknown> | undefined)?.attachments;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((entry): entry is TicketAttachmentRecord => Boolean(entry && typeof entry === 'object'));
 }
 
 function defaultStatusValues(ticket?: Ticket | null): TicketStatusUpdateInput {
@@ -48,6 +63,7 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
   const statusChanged = statusValues.status !== ticket.status;
   const statusReady = statusAllowed && statusChanged && Boolean(statusValues.reason.trim()) && Boolean(statusValues.actionTaken.trim());
   const latestResolution = ticket.metadata?.latestResolution;
+  const ticketAttachments = readTicketAttachments(ticket);
 
   const saveEdits = async () => {
     setSaving(true);
@@ -337,6 +353,31 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
           )}
 
           {editingLinkedContext && <MomenceAutomationPanel ticket={ticket} />}
+
+          {ticketAttachments.length > 0 && (
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2 block">Attachments</label>
+              <div className="space-y-2">
+                {ticketAttachments.map((attachment, index) => (
+                  <a
+                    key={`${attachment.path || attachment.publicUrl || attachment.fileName || 'attachment'}-${index}`}
+                    href={attachment.publicUrl || '#'}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 transition hover:border-rose-200 hover:bg-rose-50"
+                  >
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <Link2 className="h-3.5 w-3.5 shrink-0 text-rose-700" />
+                      <span className="truncate">{attachment.fileName || `Attachment ${index + 1}`}</span>
+                    </span>
+                    <span className="shrink-0 text-[10px] text-slate-500">
+                      {attachment.size ? `${Math.max(1, Math.round(attachment.size / 1024))} KB` : 'File'}
+                    </span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
 
           {ticket.tags.length > 0 && (
             <div>

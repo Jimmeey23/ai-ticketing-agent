@@ -5,6 +5,9 @@ import {
   EMPTY_ROUTING_FILTERS,
   applyBulkRoutingOperation,
   applyRoutingRulePatch,
+  buildCategoryRoutingRows,
+  createCityRoutingRules,
+  deleteCategoryRoutingRules,
   filterRoutingRules,
 } from './settings-routing-ops';
 
@@ -194,5 +197,99 @@ describe('settings routing operations', () => {
       { priority: 'Critical', slaHours: PRIORITY_SLA.Critical.hours },
       { priority: 'Low', slaHours: PRIORITY_SLA.Low.hours },
     ]);
+  });
+
+  it('groups routing into one city-only row per category and excludes overall or India routing display rows', () => {
+    const result = buildCategoryRoutingRows([
+      {
+        id: 'scheduling-overall',
+        category: 'Scheduling',
+        subCategory: '',
+        location: '',
+        owner: 'Akshay Rane',
+        owners: ['Akshay Rane'],
+        department: 'Sales & Client Servicing',
+        escalation: 'Jimmeey Gondaa',
+        priority: 'Medium',
+        slaHours: PRIORITY_SLA.Medium.hours,
+        active: true,
+      },
+      {
+        id: 'scheduling-india',
+        category: 'Scheduling',
+        subCategory: '',
+        location: 'Physique 57, India',
+        owner: 'Akshay Rane',
+        owners: ['Akshay Rane'],
+        department: 'Sales & Client Servicing',
+        escalation: 'Jimmeey Gondaa',
+        priority: 'Medium',
+        slaHours: PRIORITY_SLA.Medium.hours,
+        active: true,
+      },
+      ...rules,
+    ], EMPTY_ROUTING_FILTERS);
+
+    const scheduling = result.find((row) => row.category === 'Scheduling');
+
+    expect(result.filter((row) => row.category === 'Scheduling')).toHaveLength(1);
+    expect(scheduling?.overall.ruleIds).toEqual([]);
+    expect(scheduling?.mumbai.owners).toEqual(['Mrigakshi Jaiswal', 'Vivaran Dhasmana']);
+    expect(scheduling?.bengaluru.owners).toEqual(['Pushyank Nahar']);
+    expect(scheduling?.ruleIds).toEqual([
+      'scheduling-mumbai',
+      'scheduling-bengaluru',
+    ]);
+    expect(scheduling?.otherLocations).toEqual([]);
+  });
+
+  it('creates Mumbai and Bengaluru entries when adding a new settings row', () => {
+    const created = createCityRoutingRules({
+      category: 'New Member Recovery',
+      owner: 'Akshay Rane',
+      owners: ['Akshay Rane'],
+      department: 'Sales & Client Servicing',
+      escalation: 'Jimmeey Gondaa',
+      priority: 'High',
+    });
+
+    expect(created).toHaveLength(2);
+    expect(created.map((rule) => rule.location)).toEqual(['Mumbai', 'Bengaluru']);
+    expect(created.map((rule) => rule.category)).toEqual(['New Member Recovery', 'New Member Recovery']);
+    expect(created.map((rule) => rule.slaHours)).toEqual([PRIORITY_SLA.High.hours, PRIORITY_SLA.High.hours]);
+  });
+
+  it('deletes every entry for a category, including hidden overall and India entries', () => {
+    const result = deleteCategoryRoutingRules([
+      ...rules,
+      {
+        id: 'scheduling-overall',
+        category: 'Scheduling',
+        subCategory: '',
+        location: '',
+        owner: 'Akshay Rane',
+        owners: ['Akshay Rane'],
+        department: 'Sales & Client Servicing',
+        escalation: 'Jimmeey Gondaa',
+        priority: 'Medium',
+        slaHours: PRIORITY_SLA.Medium.hours,
+        active: true,
+      },
+      {
+        id: 'scheduling-india',
+        category: 'Scheduling',
+        subCategory: '',
+        location: 'Physique 57, India',
+        owner: 'Akshay Rane',
+        owners: ['Akshay Rane'],
+        department: 'Sales & Client Servicing',
+        escalation: 'Jimmeey Gondaa',
+        priority: 'Medium',
+        slaHours: PRIORITY_SLA.Medium.hours,
+        active: true,
+      },
+    ], 'Scheduling');
+
+    expect(result.map((rule) => rule.id)).toEqual(['billing-mumbai']);
   });
 });

@@ -33,8 +33,49 @@ export const EMPTY_ROUTING_FILTERS: RoutingFilterState = {
   states: [],
 };
 
+export type RoutingScopeKey = 'overall' | 'mumbai' | 'bengaluru';
+
+export interface RoutingScopeSummary {
+  key: RoutingScopeKey | 'summary';
+  label: string;
+  ruleIds: string[];
+  locations: string[];
+  owners: string[];
+  department: string;
+  escalation: string;
+  priority: RoutingRuleSetting['priority'];
+  slaHours: number;
+  active: boolean;
+  mixed: {
+    owners: boolean;
+    department: boolean;
+    escalation: boolean;
+    priority: boolean;
+    slaHours: boolean;
+    active: boolean;
+  };
+}
+
+export interface CategoryRoutingRow {
+  category: string;
+  ruleIds: string[];
+  overall: RoutingScopeSummary;
+  mumbai: RoutingScopeSummary;
+  bengaluru: RoutingScopeSummary;
+  summary: RoutingScopeSummary;
+  otherLocations: string[];
+}
+
 export function uniqueText(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function routingOpsRuleId(category: string, location = ''): string {
+  return slug(`${category}-all-${location || 'all'}`);
 }
 
 function ownersForRule(rule: RoutingRuleSetting): string[] {
@@ -58,8 +99,9 @@ function locationMatches(ruleLocation: string | undefined, selectedLocations: st
   const location = ruleLocation || '';
   const city = inferCity(location);
   return selectedLocations.some((selected) => {
-    if (selected === 'All locations') return !location;
     if (selected === 'Mumbai' || selected === 'Bengaluru') return city === selected;
+    const selectedCity = inferCity(selected);
+    if (selectedCity) return city === selectedCity;
     return location === selected;
   });
 }
@@ -71,6 +113,120 @@ function stateMatches(active: boolean, states: RoutingStateFilter[]): boolean {
   return true;
 }
 
+export function routingScopeKey(rule: Pick<RoutingRuleSetting, 'location'>): RoutingScopeKey | 'other' {
+  if (!rule.location) return 'overall';
+  const city = inferCity(rule.location);
+  if (city === 'Mumbai') return 'mumbai';
+  if (city === 'Bengaluru') return 'bengaluru';
+  return 'other';
+}
+
+export function isCityRoutingRule(rule: Pick<RoutingRuleSetting, 'location' | 'subCategory'>): boolean {
+  if (rule.subCategory) return false;
+  const scope = routingScopeKey(rule);
+  return scope === 'mumbai' || scope === 'bengaluru';
+}
+
+function emptyScope(key: RoutingScopeSummary['key'], label: string): RoutingScopeSummary {
+  return {
+    key,
+    label,
+    ruleIds: [],
+    locations: [],
+    owners: [],
+    department: '',
+    escalation: '',
+    priority: 'Medium',
+    slaHours: PRIORITY_SLA.Medium.hours,
+    active: false,
+    mixed: {
+      owners: false,
+      department: false,
+      escalation: false,
+      priority: false,
+      slaHours: false,
+      active: false,
+    },
+  };
+}
+
+function combineScope(
+  key: RoutingScopeSummary['key'],
+  label: string,
+  rules: RoutingRuleSetting[],
+): RoutingScopeSummary {
+  if (!rules.length) return emptyScope(key, label);
+
+  const ownersByRule = rules.map(ownersForRule);
+  const ownerPoolSignatures = uniqueText(ownersByRule.map((items) => items.join('|')));
+  const owners = uniqueText(ownersByRule.flat());
+  const departments = uniqueText(rules.map((rule) => rule.department));
+  const escalations = uniqueText(rules.map((rule) => rule.escalation));
+  const priorities = uniqueText(rules.map((rule) => rule.priority));
+  const slaValues = uniqueText(rules.map((rule) => String(rule.slaHours)));
+  const activeValues = uniqueText(rules.map((rule) => String(rule.active)));
+
+  return {
+    key,
+    label,
+    ruleIds: rules.map((rule) => rule.id),
+    locations: uniqueText(rules.map((rule) => rule.location || '')),
+    owners,
+    department: departments[0] || '',
+    escalation: escalations[0] || '',
+    priority: (priorities[0] || 'Medium') as RoutingRuleSetting['priority'],
+    slaHours: Number(slaValues[0] || PRIORITY_SLA.Medium.hours),
+    active: rules.some((rule) => rule.active),
+    mixed: {
+      owners: ownerPoolSignatures.length > 1,
+      department: departments.length > 1,
+      escalation: escalations.length > 1,
+      priority: priorities.length > 1,
+      slaHours: slaValues.length > 1,
+      active: activeValues.length > 1,
+    },
+  };
+}
+
+export function buildCategoryRoutingRows(
+  rules: RoutingRuleSetting[],
+  filters: RoutingFilterState,
+): CategoryRoutingRow[] {
+  const categoryRules = filterRoutingRules(rules, filters);
+  const byCategory = new Map<string, RoutingRuleSetting[]>();
+
+  for (const rule of categoryRules) {
+    const existing = byCategory.get(rule.category) || [];
+    existing.push(rule);
+    byCategory.set(rule.category, existing);
+  }
+
+  return Array.from(byCategory.entries()).map(([category, groupedRules]) => {
+    const overallRules: RoutingRuleSetting[] = [];
+    const mumbaiRules: RoutingRuleSetting[] = [];
+    const bengaluruRules: RoutingRuleSetting[] = [];
+    const otherRules: RoutingRuleSetting[] = [];
+
+    for (const rule of groupedRules) {
+      const scope = routingScopeKey(rule);
+      if (scope === 'overall') overallRules.push(rule);
+      else if (scope === 'mumbai') mumbaiRules.push(rule);
+      else if (scope === 'bengaluru') bengaluruRules.push(rule);
+      else otherRules.push(rule);
+    }
+
+    return {
+      category,
+      ruleIds: groupedRules.map((rule) => rule.id),
+      overall: combineScope('overall', 'Overall', overallRules),
+      mumbai: combineScope('mumbai', 'Mumbai', mumbaiRules),
+      bengaluru: combineScope('bengaluru', 'Bengaluru', bengaluruRules),
+      summary: combineScope('summary', 'Category', groupedRules),
+      otherLocations: uniqueText(otherRules.map((rule) => rule.location || 'Other')),
+    };
+  });
+}
+
 export function filterRoutingRules(
   rules: RoutingRuleSetting[],
   filters: RoutingFilterState,
@@ -78,7 +234,7 @@ export function filterRoutingRules(
   const query = filters.query.trim().toLowerCase();
 
   return rules.filter((rule) => {
-    if (rule.subCategory) return false;
+    if (!isCityRoutingRule(rule)) return false;
     if (!selectedIncludes(filters.categories, rule.category)) return false;
     if (!selectedIncludes(filters.departments, rule.department)) return false;
     if (filters.owners.length > 0 && !ownersForRule(rule).some((owner) => filters.owners.includes(owner))) return false;
@@ -100,6 +256,46 @@ export function filterRoutingRules(
 
     return true;
   });
+}
+
+export interface CreateCityRoutingRulesInput {
+  category: string;
+  owner?: string;
+  owners?: string[];
+  department?: string;
+  escalation?: string;
+  priority?: RoutingRuleSetting['priority'];
+  slaHours?: number;
+  active?: boolean;
+}
+
+export function createCityRoutingRules(input: CreateCityRoutingRulesInput): RoutingRuleSetting[] {
+  const category = input.category.trim() || 'New Routing Row';
+  const owners = uniqueText(input.owners?.length ? input.owners : input.owner ? [input.owner] : []);
+  const owner = owners[0] || input.owner || '';
+  const priority = input.priority || 'Medium';
+  const slaHours = input.slaHours || PRIORITY_SLA[priority].hours;
+
+  return ['Mumbai', 'Bengaluru'].map((location) => ({
+    id: routingOpsRuleId(category, location),
+    category,
+    subCategory: '',
+    location,
+    owner,
+    owners,
+    department: input.department || '',
+    escalation: input.escalation || '',
+    priority,
+    slaHours,
+    active: input.active ?? true,
+  }));
+}
+
+export function deleteCategoryRoutingRules(
+  rules: RoutingRuleSetting[],
+  category: string,
+): RoutingRuleSetting[] {
+  return rules.filter((rule) => rule.category !== category);
 }
 
 export function applyRoutingRulePatch(

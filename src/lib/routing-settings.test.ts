@@ -44,6 +44,19 @@ describe('routing settings', () => {
     expect(new Set(defaultIds).size).toBe(defaultIds.length);
   });
 
+  it('uses the Bengaluru sales team for Bengaluru sales category presets', () => {
+    const schedulingBengaluru = physique57RoutingPresets().find((rule) => (
+      rule.category === 'Scheduling' && rule.location === 'Bengaluru'
+    ));
+
+    expect(schedulingBengaluru).toMatchObject({
+      owner: 'Yashas K',
+      owners: ['Yashas K', 'Sashi Singh', 'Api Serou', 'Prathap K P'],
+      department: 'Sales & Client Servicing',
+      escalation: 'Shifa Ali',
+    });
+  });
+
   it('uses a category-level rule for any subcategory in that category', () => {
     const settings: RoutingSettings = {
       departments: [],

@@ -33,7 +33,7 @@ interface TicketContextValue {
   updateTicketStatus: (id: string, detail: TicketStatusUpdateInput, actor?: string) => Promise<void>;
   canUpdateTicketStatus: (ticket: Ticket) => boolean;
   clearAllNotifications: () => void;
-  createApprovedTicket: (draft: DraftTicket, conversationId?: string | null, context?: Record<string, unknown>) => Promise<Ticket>;
+  createApprovedTicket: (draft: DraftTicket, conversationId?: string | null, context?: Record<string, unknown>, attachments?: File[]) => Promise<Ticket>;
   createManualTicket: (draft: ManualTicketInput) => Promise<Ticket>;
   deleteTicket: (id: string) => Promise<void>;
   selectedTicket: Ticket | null;
@@ -64,6 +64,8 @@ interface DraftTicket {
   memberName?: string | null;
   memberContact?: string | null;
   reportedBy?: string | null;
+  assignedTo?: string | null;
+  department?: string | null;
   tags: string[];
   sentiment?: string;
   conversationSummary?: string;
@@ -87,6 +89,8 @@ export interface ManualTicketInput {
 }
 
 const TicketContext = createContext<TicketContextValue | null>(null);
+const LEGACY_SLA_DISABLE_MARKER_KEY = 'athena-legacy-sla-disabled-v1';
+const LEGACY_SLA_FREEZE_AT = '2100-01-01T00:00:00.000Z';
 
 interface HistoricTicketRow {
   ticket_id: string;
@@ -139,6 +143,17 @@ interface DbTicketRow {
   created_by?: string | null;
   sla_due_at: string;
 }
+
+interface TicketAttachmentRecord {
+  path: string;
+  fileName: string;
+  contentType: string;
+  size: number;
+  publicUrl: string;
+  uploadedAt: string;
+}
+
+const ATTACHMENT_BUCKET = 'ticket-attachments';
 
 type DbTicketPatch = Record<string, unknown>;
 
@@ -466,6 +481,41 @@ function resolveTeam(assignedTo: string, category: string): string {
   return resolveTicketDepartment(category, assignedTo);
 }
 
+function sanitizeAttachmentFileName(fileName: string): string {
+  const cleaned = fileName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return cleaned || 'attachment';
+}
+
+async function uploadTicketAttachments(ticketId: string, files: File[]): Promise<TicketAttachmentRecord[]> {
+  if (!files.length) return [];
+  const uploaded: TicketAttachmentRecord[] = [];
+
+  for (const file of files) {
+    const safeName = sanitizeAttachmentFileName(file.name);
+    const path = `${ticketId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
+    const { error } = await backendSupabase.storage
+      .from(ATTACHMENT_BUCKET)
+      .upload(path, file, {
+        cacheControl: '3600',
+        upsert: false,
+        contentType: file.type || undefined,
+      });
+    if (error) throwSupabaseError(error, `Attachment upload failed for ${file.name}`);
+
+    const { data } = backendSupabase.storage.from(ATTACHMENT_BUCKET).getPublicUrl(path);
+    uploaded.push({
+      path,
+      fileName: file.name,
+      contentType: file.type || 'application/octet-stream',
+      size: file.size,
+      publicUrl: data.publicUrl,
+      uploadedAt: new Date().toISOString(),
+    });
+  }
+
+  return uploaded;
+}
+
 function buildSourceRef(draft: DraftTicket, context: Record<string, unknown> = {}, conversationId?: string | null): string {
   const explicitConversationId =
     conversationId ||
@@ -490,7 +540,7 @@ function buildSourceRef(draft: DraftTicket, context: Record<string, unknown> = {
 
 function toInsertRow(draft: DraftTicket, context: Record<string, unknown> = {}, assignment?: ResolvedAssignment): DbTicketPatch {
   const assignedTo = assignment?.assignedTo || resolveTicketAssignee(draft.category, draft.studio);
-  const team = assignment?.team || resolveTeam(assignedTo, draft.category);
+  const team = assignment?.team || draft.department || resolveTeam(assignedTo, draft.category);
   const nextEscalation = assignment?.nextEscalation || getEscalationTarget(assignedTo);
   const priority = assignment?.priority || draft.priority;
   const slaDueAt = assignment?.slaHours
@@ -822,6 +872,29 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (failures.length) setError(failures.join(' · '));
   }, [fetchHistoricTickets, fetchTickets]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (loading) return;
+    if (liveTickets.length === 0) return;
+    if (window.localStorage.getItem(LEGACY_SLA_DISABLE_MARKER_KEY)) return;
+
+    const ticketIds = liveTickets.map((ticket) => ticket.id).filter(Boolean);
+    if (ticketIds.length === 0) return;
+
+    backendSupabase
+      .from('tickets')
+      .update({ sla_due_at: LEGACY_SLA_FREEZE_AT })
+      .in('id', ticketIds)
+      .then(({ error: updateError }) => {
+        if (updateError) {
+          console.warn('Legacy SLA reset failed:', getErrorMessage(updateError, 'Unknown legacy SLA reset error'));
+          return;
+        }
+        window.localStorage.setItem(LEGACY_SLA_DISABLE_MARKER_KEY, new Date().toISOString());
+        void refresh();
+      });
+  }, [liveTickets, loading, refresh]);
+
   // Initial load
   useEffect(() => {
     let mounted = true;
@@ -957,7 +1030,10 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const { data: authData } = await backendSupabase.auth.getSession();
       const reporterName = getReporterNameFromAuthUser(authData.session?.user);
       const draft = manualInputToDraft(input, reporterName);
-      const configuredAssignment = await resolveConfiguredAssignment(input.category, input.subCategory, input.studio);
+      const configuredAssignment = await resolveConfiguredAssignment(input.category, input.subCategory, input.studio, {
+        reporterName,
+        reporterEmail: authData.session?.user.email || undefined,
+      });
       const assignedTo = input.assignedTo || configuredAssignment.assignedTo;
       const assignment = input.assignedTo
         ? {
@@ -1038,7 +1114,7 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   );
 
   const createApprovedTicket = useCallback(
-    async (draft: DraftTicket, conversationId?: string | null, context?: Record<string, unknown>) => {
+    async (draft: DraftTicket, conversationId?: string | null, context?: Record<string, unknown>, attachments: File[] = []) => {
       const { data: authData } = await backendSupabase.auth.getSession();
       const signedInReporter = getReporterNameFromAuthUser(authData.session?.user);
       const publishDraft = {
@@ -1047,9 +1123,41 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       };
       const publishContext = { ...(context || {}), reportedBy: signedInReporter };
       const sourceRef = buildSourceRef(draft, context || {}, conversationId);
-      const configuredAssignment = await resolveConfiguredAssignment(publishDraft.category, publishDraft.subCategory, publishDraft.studio);
+      const configuredAssignment = await resolveConfiguredAssignment(publishDraft.category, publishDraft.subCategory, publishDraft.studio, {
+        reporterName: signedInReporter,
+        reporterEmail: authData.session?.user.email || undefined,
+      });
+      const contextAssignedTo = typeof context?.assignedTo === 'string' && context.assignedTo.trim()
+        ? context.assignedTo.trim()
+        : typeof context?.owner === 'string' && context.owner.trim()
+          ? context.owner.trim()
+          : '';
+      const contextDepartment = typeof context?.department === 'string' && context.department.trim()
+        ? context.department.trim()
+        : typeof context?.team === 'string' && context.team.trim()
+          ? context.team.trim()
+          : '';
+      const publishAssignment = contextAssignedTo
+        ? {
+            ...configuredAssignment,
+            assignedTo: contextAssignedTo,
+            team: contextDepartment || resolveTeam(contextAssignedTo, publishDraft.category),
+            nextEscalation: getEscalationTarget(contextAssignedTo),
+          }
+        : {
+            ...configuredAssignment,
+            team: contextDepartment || configuredAssignment.team,
+          };
       const insertRow = {
-        ...toInsertRow(publishDraft, { ...publishContext, conversationId }, configuredAssignment),
+        ...toInsertRow(
+          {
+            ...publishDraft,
+            assignedTo: contextAssignedTo || publishDraft.assignedTo,
+            department: contextDepartment || publishDraft.department,
+          },
+          { ...publishContext, conversationId },
+          publishAssignment
+        ),
         created_by: authData.session?.user.id,
       };
 
@@ -1123,6 +1231,30 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
       if (eventError) {
         console.warn('Ticket event logging failed:', getErrorMessage(eventError, 'Unknown ticket event error'));
+      }
+
+      if (attachments.length > 0) {
+        try {
+          const uploadedAttachments = await uploadTicketAttachments(created.id, attachments);
+          const currentMetadata = ((created.metadata || {}) as Record<string, unknown>);
+          const nextMetadata = {
+            ...currentMetadata,
+            attachments: uploadedAttachments,
+          };
+          const { data: updatedRow, error: updateError } = await backendSupabase
+            .from('tickets')
+            .update({ metadata: nextMetadata })
+            .eq('id', created.id)
+            .select('*')
+            .single();
+          if (updateError) {
+            console.warn('Ticket attachment metadata update failed:', getErrorMessage(updateError, 'Unknown metadata update error'));
+          } else if (updatedRow) {
+            created = updatedRow as DbTicketRow;
+          }
+        } catch (uploadError) {
+          console.warn('Ticket attachments upload failed:', getErrorMessage(uploadError, 'Unknown attachment upload error'));
+        }
       }
 
       await refresh();

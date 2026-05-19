@@ -33,7 +33,7 @@ type ChatMessage = {
 };
 
 type RequestBody = {
-  action?: 'draftTicket' | 'createTicket';
+  action?: 'draftTicket' | 'createTicket' | 'generateReportNarrative';
   approved?: boolean;
   draftOnly?: boolean;
   instructions?: string;
@@ -43,6 +43,14 @@ type RequestBody = {
   conversationId?: string | null;
   context?: Record<string, unknown>;
   masterData?: Record<string, unknown>;
+  reportId?: string;
+  period?: Record<string, unknown>;
+  filters?: Record<string, unknown>;
+  metrics?: Array<Record<string, unknown>>;
+  topRows?: Array<Record<string, unknown>>;
+  sections?: Array<Record<string, unknown>>;
+  dataQualityNotes?: string[];
+  assumptions?: string[];
 };
 
 const ATHENA_SYSTEM_PROMPT = `
@@ -53,9 +61,14 @@ Behavior rules:
 - Infer exactly one intake route: Request, Complaint, Feedback, or Internal Reporting.
 - Infer the best category and subcategory from the approved master data. Do not require the user to manually select them before asking issue-specific details.
 - Infer priority and include a short urgency reason based on member impact, safety risk, retention risk, billing urgency, and escalation language.
-- Ask only for operational details that are missing after inference.
+- Ask only for operational details that are missing after inference and are relevant to the described incident.
 - Do not draft a ticket until all required fields are available.
 - Do not ask multiple prose questions. Return a structured detailForm with full field definitions when multiple details are missing; ask only one concise question when exactly one detail is missing.
+- Dynamically decide issue-specific fields from the incident text, inferred route/category/subcategory, and current context. Do not use fixed incident templates or static question sets.
+- For issue-specific fields, return full field definitions with labels and options tailored to that exact incident when useful.
+- Always populate inferredContext with category, subCategory, intakeRoute, and priority once inferred, even when asking for more details.
+- Before returning any detailForm, decide which context fields are actually required for this specific incident; omit unrelated Momence member, session, class, and trainer fields.
+- Ask for member, session, class, or trainer details only when the described incident actually requires them. Do not include selected/stale member, session, class, or trainer context in the draft unless it is relevant to the ticket.
 - Use date fields for dates and datetime-local fields for date/time fields.
 - Use only approved master-data options for studios, instructors, class types, categories, subcategories, priorities, associates, and route buttons.
 - Use provided routingRules, employees, departments, and locations as authoritative when present. Do not invent owner names, departments, escalation paths, SLAs, or locations.
@@ -213,13 +226,37 @@ function ticketSlug(value: unknown): string {
   return cleanString(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
+function shouldUseMemberContext(issueText: string, context: Record<string, unknown>, category = '', subCategory = ''): boolean {
+  const value = [
+    issueText,
+    category,
+    subCategory,
+    cleanString(context.requestType),
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  return /member|client|customer|guest|prospect|profile|contact|phone|email|membership|package|billing|payment|refund|freeze|roll\s?over|extension|renewal|follow-up/.test(value);
+}
+
+function shouldUseSessionContext(issueText: string, context: Record<string, unknown>, category = '', subCategory = ''): boolean {
+  const value = [
+    issueText,
+    category,
+    subCategory,
+    cleanString(context.requestType),
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  return /class|session|booking|schedul|waitlist|attendance|attendee|trainer|instructor|barre|cycle|powercycle|strength|late cancellation|no-show/.test(value);
+}
+
 function professionalDescription(text: string, context: Record<string, unknown>, category: string, subCategory: string): string {
   const route = cleanString(context.intakeRoute, 'Unclassified');
-  const member = cleanString(context.memberName);
+  const includeMemberContext = shouldUseMemberContext(text, context, category, subCategory);
+  const includeSessionContext = shouldUseSessionContext(text, context, category, subCategory);
+  const member = includeMemberContext ? cleanString(context.memberName) : '';
   const studio = cleanString(context.studio);
-  const trainer = cleanString(context.trainer);
-  const classType = cleanString(context.classType);
-  const membership = cleanString(context.membership);
+  const trainer = includeSessionContext ? cleanString(context.trainer) : '';
+  const classType = includeSessionContext ? cleanString(context.classType) : '';
+  const membership = includeMemberContext ? cleanString(context.membership) : '';
   const resolution = cleanString(context.desiredResolution);
   const incidentDateTime = cleanString(context.incidentDateTime);
 
@@ -251,10 +288,10 @@ function fallbackDraft(messages: ChatMessage[] = [], context: Record<string, unk
     inferredCategory = 'Pricing and Memberships';
   } else if (lower.includes('hosted') || lower.includes('partner') || lower.includes('influencer')) {
     inferredCategory = 'Hosted Class & Partnerships';
+  } else if (lower.includes('injury') || lower.includes('safety') || lower.includes('medical') || lower.includes('security') || lower.includes('theft') || lower.includes('stolen') || lower.includes('missing cash')) {
+    inferredCategory = 'Safety and Security';
   } else if (lower.includes('equipment') || lower.includes('ac') || lower.includes('locker') || lower.includes('clean')) {
     inferredCategory = 'Studio Amenities and Facilities';
-  } else if (lower.includes('injury') || lower.includes('safety') || lower.includes('medical')) {
-    inferredCategory = 'Safety and Security';
   } else if (lower.includes('trainer') || lower.includes('instructor') || lower.includes('class')) {
     inferredCategory = 'Class Experience';
   }
@@ -264,10 +301,12 @@ function fallbackDraft(messages: ChatMessage[] = [], context: Record<string, unk
     normalizePriority(context.priority || (category === 'Safety and Security' || category === 'Safety & Medical' ? 'Critical' : lower.includes('angry') || lower.includes('urgent') ? 'High' : 'Medium'));
 
   const subCategory = cleanString(context.subCategory, category === 'General Feedback' ? 'Other' : 'Member-reported issue');
+  const includeMemberContext = shouldUseMemberContext(text, context, category, subCategory);
+  const includeSessionContext = shouldUseSessionContext(text, context, category, subCategory);
   const titleParts = [
     cleanString(context.intakeRoute, 'Ticket'),
     subCategory,
-    cleanString(context.memberName),
+    includeMemberContext ? cleanString(context.memberName) : '',
   ].filter(Boolean);
 
   return {
@@ -277,11 +316,11 @@ function fallbackDraft(messages: ChatMessage[] = [], context: Record<string, unk
     subCategory,
     priority,
     studio: cleanString(context.studio, 'Unspecified Studio'),
-    trainer: cleanString(context.trainer) || null,
-    classType: cleanString(context.classType) || null,
-    classDateTime: cleanString(context.classDateTime) || null,
-    memberName: cleanString(context.memberName) || null,
-    memberContact: cleanString(context.memberContact) || null,
+    trainer: includeSessionContext ? cleanString(context.trainer) || null : null,
+    classType: includeSessionContext ? cleanString(context.classType) || null : null,
+    classDateTime: includeSessionContext ? cleanString(context.classDateTime) || null : null,
+    memberName: includeMemberContext ? cleanString(context.memberName) || null : null,
+    memberContact: includeMemberContext ? cleanString(context.memberContact) || null : null,
     reportedBy: cleanString(context.reportedBy, 'AI Intake') || null,
     tags: [
       'ai-draft',
@@ -392,6 +431,7 @@ async function askAiForIntake(body: RequestBody, instructions: string): Promise<
             'Infer category and subCategory from member voice whenever possible. Ask for category or subCategory only when the text is genuinely ambiguous after using the approved master data.',
             'If memberName/memberContact is needed, use memberName so the frontend renders Momence member search.',
             'If class/session details are needed, use classType so the frontend renders Momence session search.',
+            'Do not include memberName, memberContact, classType, sessionId, classDateTime, or trainer in detailForm or ticket unless those fields are necessary for the described incident.',
           ].join('\n'),
         },
         {
@@ -414,6 +454,129 @@ async function askAiForIntake(body: RequestBody, instructions: string): Promise<
   const data = await response.json();
   const content = cleanString(data?.choices?.[0]?.message?.content);
   return normalizeAiIntakeResponse(parseJsonObject(content));
+}
+
+type AiReportNarrative = {
+  summary: string;
+  findings: string[];
+  risks: string[];
+  recommendedActions: string[];
+  dataQualityNotes: string[];
+  generatedByAi: boolean;
+};
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => cleanString(item)).filter(Boolean).slice(0, 8);
+}
+
+function normalizeRecordArray(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Record<string, unknown> => (
+    Boolean(item) &&
+    typeof item === 'object' &&
+    !Array.isArray(item)
+  ));
+}
+
+function cleanReportValue(value: unknown, fallback = '0'): string {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return fallback;
+}
+
+function fallbackReportNarrative(body: RequestBody): AiReportNarrative {
+  const metrics = normalizeRecordArray(body.metrics);
+  const dataQualityNotes = normalizeStringArray(body.dataQualityNotes);
+  const ticketCount = metrics.find((metric) => metric.id === 'ticket_count')?.value;
+  const breached = metrics.find((metric) => metric.id === 'sla_breached')?.value;
+  const highPriority = metrics.find((metric) => metric.id === 'high_priority')?.value;
+  return {
+    summary: `Report ${cleanString(body.reportId, 'selected report')} covers ${cleanReportValue(ticketCount, 'the filtered')} tickets for the requested period.`,
+    findings: metrics.slice(0, 5).map((metric) => `${cleanReportValue(metric.label, cleanReportValue(metric.id, 'Metric'))}: ${cleanReportValue(metric.value)}`),
+    risks: [
+      `SLA breached tickets: ${cleanReportValue(breached)}.`,
+      `Critical or High priority tickets: ${cleanReportValue(highPriority)}.`,
+    ],
+    recommendedActions: [
+      'Review the highest-risk source rows before sharing the report.',
+      'Use the recurring category and owner workload signals to assign follow-up owners.',
+      'Improve intake fields called out in the data-quality notes.',
+    ],
+    dataQualityNotes,
+    generatedByAi: false,
+  };
+}
+
+function normalizeReportNarrative(value: Record<string, unknown> | null, body: RequestBody): AiReportNarrative {
+  const fallback = fallbackReportNarrative(body);
+  if (!value) return fallback;
+  const dataQualityNotes = normalizeStringArray(value.dataQualityNotes);
+  return {
+    summary: cleanString(value.summary, fallback.summary),
+    findings: normalizeStringArray(value.findings).length ? normalizeStringArray(value.findings) : fallback.findings,
+    risks: normalizeStringArray(value.risks).length ? normalizeStringArray(value.risks) : fallback.risks,
+    recommendedActions: normalizeStringArray(value.recommendedActions).length
+      ? normalizeStringArray(value.recommendedActions)
+      : fallback.recommendedActions,
+    dataQualityNotes: dataQualityNotes.length ? dataQualityNotes : fallback.dataQualityNotes,
+    generatedByAi: typeof value.generatedByAi === 'boolean' ? value.generatedByAi : true,
+  };
+}
+
+async function askAiForReportNarrative(body: RequestBody): Promise<AiReportNarrative> {
+  const apiKey = Deno.env.get('OPENAI_API_KEY');
+  if (!apiKey) return fallbackReportNarrative(body);
+
+  const model = Deno.env.get('OPENAI_MODEL') || 'gpt-4o-mini';
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You are Athena, the Physique 57 India internal operations reporting assistant.',
+            'Write concise executive reporting prose from computed metrics only.',
+            'Do not invent counts, rates, tickets, members, owners, departments, or financial impact.',
+            'Do not expose member contact details. Refer to source rows only by ticket ID/title/category when needed.',
+            'Use third-person internal operations language.',
+            'Return JSON only with this schema:',
+            '{"summary": string, "findings": string[], "risks": string[], "recommendedActions": string[], "dataQualityNotes": string[]}',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            reportId: body.reportId,
+            period: body.period,
+            filters: body.filters,
+            metrics: body.metrics,
+            sections: body.sections,
+            topRows: body.topRows,
+            dataQualityNotes: body.dataQualityNotes,
+            assumptions: body.assumptions,
+          }),
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    console.error('OpenAI report narrative request failed', response.status, await response.text());
+    return fallbackReportNarrative(body);
+  }
+
+  const data = await response.json();
+  const content = cleanString(data?.choices?.[0]?.message?.content);
+  return normalizeReportNarrative(parseJsonObject(content), body);
 }
 
 function inferContextFromText(text: string, context: Record<string, unknown> = {}): Record<string, string> {
@@ -536,7 +699,7 @@ function requiredFieldsForIssue(text: string, context: Record<string, unknown>):
   if (physicalStudioCategories.has(category) && /select studio|which studio|studio record|exact studio/.test(lower)) add('studio', context.studio);
   const specificMemberRequired =
     (/select member|momence member|member profile|which member|member record|link member/.test(lower) ||
-      /member|client|customer|guest|prospect|refund|freeze|roll|extension|membership|package|renewal|payment|billing|theft|stolen|injury|harassment|medical|missing cash/.test(lower)) &&
+      /refund|freeze|roll|extension|membership|package|renewal|payment|billing/.test(lower)) &&
     !/multiple|several|attendees|leads|prospects|team|staff|internal report|hosted class|post-class|regional operations|sales team/.test(lower) &&
     category !== 'Hosted Class & Partnerships' &&
     category !== 'Sales & Consultation';
@@ -664,6 +827,18 @@ Deno.serve(async (request) => {
 
   try {
     const body = await request.json() as RequestBody;
+
+    if (body.action === 'generateReportNarrative') {
+      const narrative = await askAiForReportNarrative(body);
+      return json({
+        narrative,
+        summary: narrative.summary,
+        findings: narrative.findings,
+        risks: narrative.risks,
+        recommendedActions: narrative.recommendedActions,
+        dataQualityNotes: narrative.dataQualityNotes,
+      });
+    }
 
     if (body.action === 'createTicket' || body.approved === true) {
       const draft = body.draft || body.ticket;

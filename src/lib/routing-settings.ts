@@ -71,6 +71,11 @@ export interface ResolvedAssignment {
   source: 'admin_routing' | 'default_routing';
 }
 
+export interface AssignmentResolutionContext {
+  reporterName?: string;
+  reporterEmail?: string;
+}
+
 const STORAGE_KEY = 'athena-routing-settings-v1';
 const DEFAULT_LOCATION_CAPACITY = 20;
 
@@ -116,7 +121,7 @@ function mergeRoutingRules(rules: RoutingRuleSetting[]): RoutingRuleSetting[] {
   return Array.from(byId.values());
 }
 
-function routingRuleId(category: string, location = '', subCategory = ''): string {
+export function routingRuleId(category: string, location = '', subCategory = ''): string {
   return slug(`${category}-${subCategory || 'all'}-${location || 'all'}`);
 }
 
@@ -143,19 +148,20 @@ const SUPPLEMENTAL_EMPLOYEES: EmployeeSetting[] = [
 ];
 
 const ROUTING_PRESET_GROUPS = {
+  // CST grouping by studio for default routing ownership pools.
   kwalitySales: ['Akshay Rane', 'Sheetal Kataria', 'Vahishta Fitter', 'Zaheer Agarbattiwala', 'Taahira Sayyed'],
-  bandraSales: ['Deesha Changwani', 'Shipra Pinge', 'Imran Shaikh', 'Nadiya Shaikh'],
+  bandraSales: ['Imran Shaikh', 'Shipra Pinge', 'Nadiya Shaikh', 'Deesha Changwani'],
+  bengaluruSales: ['Api Serou', 'Prathap K P', 'Sashi Singh', 'Yashas K'],
   mumbaiOps: ['Zahur Shaikh'],
   bengaluruOps: ['Shifa Ali'],
   mumbaiTraining: ['Mrigakshi Jaiswal', 'Vivaran Dhasmana'],
   bengaluruTraining: ['Pushyank Nahar'],
   mumbaiMarketing: ['Reyna'],
   bengaluruMarketing: ['Saachi Jr.'],
-  mumbaiAccounts: ['Gaurav Sogam'],
-  bengaluruAccounts: ['Rasika Kalambe'],
+  mumbaiAccounts: ['Pujal Jathar', 'Rasika Kalambe', 'Gaurav Sogam'],
+  bengaluruAccounts: ['Sachin Nalawade'],
   brand: ['Jimmeey Gondaa', 'Saachi Shetty'],
   social: ['Jhanvi'],
-  bengaluruDefault: ['Shifa Ali'],
 };
 
 const SALES_CATEGORIES = ['Scheduling', 'Booking & Schedule', 'Front Desk & Service', 'Customer Service and Communication', 'Sales & Consultation'];
@@ -206,7 +212,7 @@ export function physique57RoutingPresets(): RoutingRuleSetting[] {
 
   add(SALES_CATEGORIES, 'Kwality House, Kemps Corner', ROUTING_PRESET_GROUPS.kwalitySales, 'Sales & Client Servicing', 'Jimmeey Gondaa');
   add(SALES_CATEGORIES, 'Supreme HQ, Bandra', ROUTING_PRESET_GROUPS.bandraSales, 'Sales & Client Servicing', 'Jimmeey Gondaa');
-  add(SALES_CATEGORIES, 'Bengaluru', ROUTING_PRESET_GROUPS.bengaluruDefault, 'Management', 'Jimmeey Gondaa');
+  add(SALES_CATEGORIES, 'Bengaluru', ROUTING_PRESET_GROUPS.bengaluruSales, 'Sales & Client Servicing', 'Shifa Ali');
   add(OPS_CATEGORIES, 'Mumbai', ROUTING_PRESET_GROUPS.mumbaiOps, 'Operations', 'Saachi Shetty - Operations', 'High');
   add(OPS_CATEGORIES, 'Bengaluru', ROUTING_PRESET_GROUPS.bengaluruOps, 'Management', 'Saachi Shetty - Operations', 'High');
   add(TRAINING_CATEGORIES, 'Mumbai', ROUTING_PRESET_GROUPS.mumbaiTraining, 'Training', 'Anisha Shah');
@@ -555,7 +561,8 @@ export function resolveAssignmentFromSettings(
   settings: RoutingSettings,
   category: string,
   subCategory?: string,
-  studio?: string
+  studio?: string,
+  context?: AssignmentResolutionContext
 ): ResolvedAssignment {
   const best = settings.routingRules
     .map((rule) => ({ rule, score: specificity(rule, category, subCategory, studio) }))
@@ -564,7 +571,18 @@ export function resolveAssignmentFromSettings(
 
   if (best) {
     const ownerPool = best.owners?.length ? best.owners : [best.owner];
-    const assignedTo = ownerPool[0] || best.owner;
+    const normalizedReporterName = String(context?.reporterName || '').trim().toLowerCase();
+    const normalizedReporterEmail = String(context?.reporterEmail || '').trim().toLowerCase();
+    const qualifiedReporterOwner = ownerPool.find((owner) => {
+      const normalizedOwner = owner.trim().toLowerCase();
+      if (normalizedReporterName && normalizedOwner === normalizedReporterName) return true;
+      if (normalizedReporterEmail) {
+        const employee = getEmployee(owner);
+        if (employee?.email?.trim().toLowerCase() === normalizedReporterEmail) return true;
+      }
+      return false;
+    });
+    const assignedTo = qualifiedReporterOwner || ownerPool[0] || best.owner;
     return {
       assignedTo,
       ownerPool,
@@ -588,8 +606,9 @@ export function resolveAssignmentFromSettings(
 export async function resolveConfiguredAssignment(
   category: string,
   subCategory?: string,
-  studio?: string
+  studio?: string,
+  context?: AssignmentResolutionContext
 ): Promise<ResolvedAssignment> {
   const settings = await loadRoutingSettings();
-  return resolveAssignmentFromSettings(settings, category, subCategory, studio);
+  return resolveAssignmentFromSettings(settings, category, subCategory, studio, context);
 }

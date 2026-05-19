@@ -85,7 +85,7 @@ function isSpecificMemberRequired(context: IntakeContext, issueText: string, cat
     return false;
   }
   if (category === 'Hosted Class & Partnerships' || category === 'Sales & Consultation') return false;
-  return /refund|freeze|roll|extension|membership|package|renewal|payment|billing|theft|stolen|injury|harassment|medical|missing cash/.test(issueText);
+  return /refund|freeze|roll|extension|membership|package|renewal|payment|billing/.test(issueText);
 }
 
 export function isMissingIntakeValue(value: unknown): boolean {
