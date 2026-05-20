@@ -660,7 +660,7 @@ export const ASSIGNMENT_RULES: Record<string, string> = {
   'Studio Amenities and Facilities': 'Zahur Shaikh',
   'Operating Systems': 'Saachi Shetty - Operations',
   'Tech Issues': 'Saachi Shetty - Operations',
-  'Pricing and Memberships': 'Pujal Jathar',
+  'Pricing and Memberships': 'Akshay Rane',
   'Customer Service and Communication': 'Nunu Yeptomi',
   'Brand Feedback': 'Saachi Shetty',
   'Safety and Security': 'Saachi Shetty - Operations',
@@ -669,7 +669,7 @@ export const ASSIGNMENT_RULES: Record<string, string> = {
   'Instructor & Class Quality': 'Anisha Shah',
   'Booking & Schedule': 'Akshay Rane',
   'Facility & Equipment': 'Zahur Shaikh',
-  'Billing & Membership': 'Pujal Jathar',
+  'Billing & Membership': 'Akshay Rane',
   'Safety & Medical': 'Saachi Shetty - Operations',
   'Front Desk & Service': 'Nunu Yeptomi',
   'App & Digital': 'Saachi Shetty - Operations',
@@ -681,7 +681,7 @@ export const ASSIGNMENT_RULES: Record<string, string> = {
 
 const BENGALURU_SALES_OWNER = 'Yashas K';
 const MUMBAI_SALES_OWNER = 'Akshay Rane';
-const BANDRA_SALES_OWNER = 'Deesha Changwani';
+const BANDRA_SALES_OWNER = 'Imran Shaikh';
 const BENGALURU_OPERATIONS_OWNER = 'Shifa Ali';
 const MUMBAI_OPERATIONS_OWNER = 'Zahur Shaikh';
 
@@ -694,7 +694,15 @@ function isBandraStudio(studio?: string): boolean {
 }
 
 function isSalesCategory(category: string): boolean {
-  return ['Scheduling', 'Booking & Schedule', 'Front Desk & Service', 'Customer Service and Communication', 'Sales & Consultation'].includes(category);
+  return [
+    'Scheduling',
+    'Booking & Schedule',
+    'Front Desk & Service',
+    'Customer Service and Communication',
+    'Sales & Consultation',
+    'Billing & Membership',
+    'Pricing and Memberships',
+  ].includes(category);
 }
 
 function isOperationsCategory(category: string): boolean {
@@ -720,11 +728,10 @@ export function resolveTicketAssignee(category: string, studio?: string): string
 export function resolveTicketDepartment(category: string, assignedTo: string): string {
   const employee = getEmployee(assignedTo);
   if (employee?.team) return employee.team;
-  if (category.includes('Membership') || category.includes('Pricing') || category.includes('Billing')) return 'Accounts';
+  if (isSalesCategory(category)) return 'Sales & Client Servicing';
   if (category.includes('Trainer') || category.includes('Class') || category.includes('Instructor')) return 'Training';
   if (category.includes('Brand') || category.includes('Hosted')) return 'Marketing';
   if (isOperationsCategory(category)) return 'Operations';
-  if (isSalesCategory(category)) return 'Sales & Client Servicing';
   return 'Customer Service';
 }
 

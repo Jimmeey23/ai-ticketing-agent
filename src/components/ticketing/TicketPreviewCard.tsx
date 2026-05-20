@@ -124,6 +124,7 @@ export const TicketPreviewCard: React.FC<Props> = ({ draft, onConfirm, onEdit, o
             />
             <EditInput label="Instructor" value={editedDraft.trainer || ''} onChange={(value) => updateEditedDraft('trainer', value)} />
             <EditInput label="Signature experience" value={editedDraft.classType || ''} onChange={(value) => updateEditedDraft('classType', value)} />
+            <EditInput label="Session time" type="datetime-local" value={editedDraft.classDateTime || ''} onChange={(value) => updateEditedDraft('classDateTime', value)} />
             <EditInput label="Community member" value={editedDraft.memberName || ''} onChange={(value) => updateEditedDraft('memberName', value)} />
             <EditInput label="Member contact" value={editedDraft.memberContact || ''} onChange={(value) => updateEditedDraft('memberContact', value)} />
             <EditInput label="Documented by" value={editedDraft.reportedBy || ''} onChange={(value) => updateEditedDraft('reportedBy', value)} />
@@ -273,10 +274,11 @@ const Row: React.FC<{ icon: React.ReactNode; label: string; value: string }> = (
   </div>
 );
 
-const EditInput: React.FC<{ label: string; value: string; onChange: (value: string) => void }> = ({ label, value, onChange }) => (
+const EditInput: React.FC<{ label: string; value: string; type?: string; onChange: (value: string) => void }> = ({ label, value, type = 'text', onChange }) => (
   <label className="block rounded-xl border border-slate-200 bg-white p-2">
     <span className="mb-1 block text-[9px] font-semibold uppercase tracking-[0.14em] text-stone-400">{label}</span>
     <input
+      type={type}
       value={value}
       onChange={(event) => onChange(event.target.value)}
       className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-stone-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"

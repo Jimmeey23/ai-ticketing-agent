@@ -57,7 +57,7 @@ describe('routing settings', () => {
     });
   });
 
-  it('routes refund issues to Sales & Client Servicing instead of Accounts', () => {
+  it('routes refund issues to Sales & Client Servicing', () => {
     const settings = defaultRoutingSettings();
 
     expect(
@@ -88,6 +88,74 @@ describe('routing settings', () => {
       ownerPool: ['Yashas K', 'Sashi Singh', 'Api Serou', 'Prathap K P'],
       team: 'Sales & Client Servicing',
       nextEscalation: 'Shifa Ali',
+      priority: 'High',
+      slaHours: 8,
+    });
+  });
+
+  it('routes billing and pricing categories to Sales & Client Servicing by studio', () => {
+    const settings = defaultRoutingSettings();
+
+    expect(
+      resolveAssignmentFromSettings(
+        settings,
+        'Billing & Membership',
+        'Invoice / Receipt Request',
+        'Supreme HQ, Bandra'
+      )
+    ).toMatchObject({
+      assignedTo: 'Imran Shaikh',
+      ownerPool: ['Imran Shaikh', 'Shipra Pinge', 'Nadiya Shaikh', 'Deesha Changwani'],
+      team: 'Sales & Client Servicing',
+      nextEscalation: 'Jimmeey Gondaa',
+      priority: 'High',
+      slaHours: 8,
+    });
+
+    expect(
+      resolveAssignmentFromSettings(
+        settings,
+        'Pricing and Memberships',
+        'Membership Pause and Freeze Policy',
+        'Kenkere House, Bengaluru'
+      )
+    ).toMatchObject({
+      assignedTo: 'Yashas K',
+      ownerPool: ['Yashas K', 'Sashi Singh', 'Api Serou', 'Prathap K P'],
+      team: 'Sales & Client Servicing',
+      nextEscalation: 'Shifa Ali',
+      priority: 'High',
+      slaHours: 8,
+    });
+  });
+
+  it('overrides stale finance routing rows for billing and pricing categories', () => {
+    const settings: RoutingSettings = {
+      departments: [],
+      employees: [],
+      locations: [],
+      routingRules: [
+        {
+          id: 'legacy-billing-route',
+          category: 'Billing & Membership',
+          subCategory: '',
+          location: 'Mumbai',
+          owner: 'Pujal Jathar',
+          owners: ['Pujal Jathar'],
+          department: 'Legacy Finance',
+          escalation: 'Sachin Nalawade',
+          priority: 'Medium',
+          slaHours: 24,
+          active: true,
+        },
+      ],
+    };
+
+    expect(
+      resolveAssignmentFromSettings(settings, 'Billing & Membership', 'Invoice / Receipt Request', 'Supreme HQ, Bandra')
+    ).toMatchObject({
+      assignedTo: 'Imran Shaikh',
+      team: 'Sales & Client Servicing',
       priority: 'High',
       slaHours: 8,
     });
@@ -134,27 +202,27 @@ describe('routing settings', () => {
       locations: [],
       routingRules: [
         {
-          id: 'billing-category',
-          category: 'Billing & Membership',
+          id: 'facility-category',
+          category: 'Facility & Equipment',
           subCategory: '',
           location: '',
-          owner: 'Pujal Jathar',
-          owners: ['Pujal Jathar'],
-          department: 'Accounts',
-          escalation: 'Sachin Nalawade',
+          owner: 'Zahur Shaikh',
+          owners: ['Zahur Shaikh'],
+          department: 'Operations',
+          escalation: 'Saachi Shetty - Operations',
           priority: 'Medium',
           slaHours: 24,
           active: true,
         },
         {
-          id: 'billing-invoice',
-          category: 'Billing & Membership',
-          subCategory: 'Invoice / Receipt Request',
+          id: 'facility-machine',
+          category: 'Facility & Equipment',
+          subCategory: 'Machine / Equipment Issue',
           location: '',
-          owner: 'Gaurav Sogam',
-          owners: ['Gaurav Sogam'],
-          department: 'Accounts',
-          escalation: 'Sachin Nalawade',
+          owner: 'Sagar Ingole',
+          owners: ['Sagar Ingole'],
+          department: 'Operations',
+          escalation: 'Zahur Shaikh',
           priority: 'High',
           slaHours: 8,
           active: true,
@@ -163,9 +231,9 @@ describe('routing settings', () => {
     };
 
     expect(
-      resolveAssignmentFromSettings(settings, 'Billing & Membership', 'Invoice / Receipt Request', 'Physique 57, Mumbai')
+      resolveAssignmentFromSettings(settings, 'Facility & Equipment', 'Machine / Equipment Issue', 'Physique 57, Mumbai')
     ).toMatchObject({
-      assignedTo: 'Gaurav Sogam',
+      assignedTo: 'Sagar Ingole',
       priority: 'High',
       slaHours: 8,
     });

@@ -158,19 +158,16 @@ const ROUTING_PRESET_GROUPS = {
   bengaluruTraining: ['Pushyank Nahar'],
   mumbaiMarketing: ['Reyna'],
   bengaluruMarketing: ['Saachi Jr.'],
-  mumbaiAccounts: ['Pujal Jathar', 'Rasika Kalambe', 'Gaurav Sogam'],
-  bengaluruAccounts: ['Sachin Nalawade'],
   brand: ['Jimmeey Gondaa', 'Saachi Shetty'],
   social: ['Jhanvi'],
 };
 
 const SALES_CATEGORIES = ['Scheduling', 'Booking & Schedule', 'Front Desk & Service', 'Customer Service and Communication', 'Sales & Consultation'];
+const CLIENT_SERVICING_CATEGORIES = ['Billing & Membership', 'Pricing and Memberships'];
 const OPS_CATEGORIES = ['Facility & Equipment', 'Repair and Maintenance', 'Studio Amenities and Facilities', 'Safety and Security', 'Safety & Medical', 'Theft and Lost Items', 'Operating Systems', 'Tech Issues', 'App & Digital'];
 const TRAINING_CATEGORIES = ['Class Experience', 'Trainer Feedback', 'Instructor & Class Quality', 'Member Progress & Transformation'];
-const ACCOUNTS_CATEGORIES = ['Billing & Membership', 'Pricing and Memberships'];
 const MARKETING_CATEGORIES = ['Hosted Class & Partnerships'];
 const BRAND_CATEGORIES = ['Brand Feedback'];
-const REFUND_CATEGORIES = ['Billing & Membership', 'Pricing and Memberships'];
 
 function createRule(
   category: string,
@@ -196,8 +193,8 @@ function createRule(
   };
 }
 
-function isRefundRouting(category: string, subCategory?: string): boolean {
-  return REFUND_CATEGORIES.includes(category) && /refund/i.test(subCategory || '');
+function isClientServicingRouting(category: string): boolean {
+  return CLIENT_SERVICING_CATEGORIES.includes(category);
 }
 
 function salesOwnersForStudio(studio?: string): { owners: string[]; escalation: string } {
@@ -211,7 +208,7 @@ function salesOwnersForStudio(studio?: string): { owners: string[]; escalation: 
   return { owners: ROUTING_PRESET_GROUPS.kwalitySales, escalation: 'Jimmeey Gondaa' };
 }
 
-function resolveRefundAssignment(studio?: string): ResolvedAssignment {
+function resolveClientServicingAssignment(studio?: string): ResolvedAssignment {
   const { owners, escalation } = salesOwnersForStudio(studio);
   const assignedTo = owners[0];
   return {
@@ -243,14 +240,15 @@ export function physique57RoutingPresets(): RoutingRuleSetting[] {
   add(SALES_CATEGORIES, 'Kwality House, Kemps Corner', ROUTING_PRESET_GROUPS.kwalitySales, 'Sales & Client Servicing', 'Jimmeey Gondaa');
   add(SALES_CATEGORIES, 'Supreme HQ, Bandra', ROUTING_PRESET_GROUPS.bandraSales, 'Sales & Client Servicing', 'Jimmeey Gondaa');
   add(SALES_CATEGORIES, 'Bengaluru', ROUTING_PRESET_GROUPS.bengaluruSales, 'Sales & Client Servicing', 'Shifa Ali');
+  add(CLIENT_SERVICING_CATEGORIES, 'Kwality House, Kemps Corner', ROUTING_PRESET_GROUPS.kwalitySales, 'Sales & Client Servicing', 'Jimmeey Gondaa', 'High');
+  add(CLIENT_SERVICING_CATEGORIES, 'Supreme HQ, Bandra', ROUTING_PRESET_GROUPS.bandraSales, 'Sales & Client Servicing', 'Jimmeey Gondaa', 'High');
+  add(CLIENT_SERVICING_CATEGORIES, 'Bengaluru', ROUTING_PRESET_GROUPS.bengaluruSales, 'Sales & Client Servicing', 'Shifa Ali', 'High');
   add(OPS_CATEGORIES, 'Mumbai', ROUTING_PRESET_GROUPS.mumbaiOps, 'Operations', 'Saachi Shetty - Operations', 'High');
   add(OPS_CATEGORIES, 'Bengaluru', ROUTING_PRESET_GROUPS.bengaluruOps, 'Management', 'Saachi Shetty - Operations', 'High');
   add(TRAINING_CATEGORIES, 'Mumbai', ROUTING_PRESET_GROUPS.mumbaiTraining, 'Training', 'Anisha Shah');
   add(TRAINING_CATEGORIES, 'Bengaluru', ROUTING_PRESET_GROUPS.bengaluruTraining, 'Training', 'Anisha Shah');
   add(MARKETING_CATEGORIES, 'Mumbai', ROUTING_PRESET_GROUPS.mumbaiMarketing, 'Marketing', 'Reyna');
   add(MARKETING_CATEGORIES, 'Bengaluru', ROUTING_PRESET_GROUPS.bengaluruMarketing, 'Marketing', 'Reyna');
-  add(ACCOUNTS_CATEGORIES, 'Mumbai', ROUTING_PRESET_GROUPS.mumbaiAccounts, 'Accounts', 'Sachin Nalawade', 'High');
-  add(ACCOUNTS_CATEGORIES, 'Bengaluru', ROUTING_PRESET_GROUPS.bengaluruAccounts, 'Accounts', 'Sachin Nalawade', 'High');
   add(BRAND_CATEGORIES, '', ROUTING_PRESET_GROUPS.brand, 'Management', 'Mitali Kumar');
   add(['Hosted Class & Partnerships'], '', ROUTING_PRESET_GROUPS.social, 'Marketing', 'Reyna');
   return mergeRoutingRules(rules);
@@ -594,8 +592,8 @@ export function resolveAssignmentFromSettings(
   studio?: string,
   context?: AssignmentResolutionContext
 ): ResolvedAssignment {
-  if (isRefundRouting(category, subCategory)) {
-    return resolveRefundAssignment(studio);
+  if (isClientServicingRouting(category)) {
+    return resolveClientServicingAssignment(studio);
   }
 
   const best = settings.routingRules

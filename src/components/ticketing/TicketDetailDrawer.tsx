@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Ticket, PRIORITY_SLA, STATUSES, ASSOCIATES, CATEGORIES, STUDIOS, CLASS_TYPES, TRAINERS, getEscalationTarget } from '@/lib/ticketing-data';
+import { buildTicketEditPatch } from '@/lib/ticket-editing';
 import { TicketStatusUpdateInput } from './TicketContext';
 import { useTickets } from './useTickets';
 import { X, Clock, MapPin, User, Calendar, Tag, MessageSquare, Phone, Lock, Pencil, Save, Trash2, Link2 } from 'lucide-react';
@@ -37,11 +38,25 @@ function defaultStatusValues(ticket?: Ticket | null): TicketStatusUpdateInput {
   };
 }
 
+function toDateTimeLocalInputValue(value?: string): string {
+  if (!value) return '';
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function tagsFromInput(value: string): string[] {
+  return Array.from(new Set(value.split(',').map((tag) => tag.trim()).filter(Boolean)));
+}
+
 export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
   const { updateTicket, updateTicketStatus, canUpdateTicketStatus, deleteTicket } = useTickets();
   const [editingLinkedContext, setEditingLinkedContext] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState('');
   const [statusSaving, setStatusSaving] = useState(false);
   const [statusError, setStatusError] = useState('');
   const [editValues, setEditValues] = useState<Partial<Ticket>>({});
@@ -51,6 +66,7 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
     setEditingLinkedContext(false);
     setEditing(false);
     setEditValues(ticket || {});
+    setEditError('');
     setStatusValues(defaultStatusValues(ticket));
     setStatusError('');
   }, [ticket]);
@@ -68,23 +84,12 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
 
   const saveEdits = async () => {
     setSaving(true);
+    setEditError('');
     try {
-      await updateTicket(ticket.id, {
-        title: currentValues.title,
-        description: currentValues.description,
-        category: currentValues.category,
-        subCategory: currentValues.subCategory,
-        priority: currentValues.priority,
-        studio: currentValues.studio,
-        trainer: currentValues.trainer,
-        classType: currentValues.classType,
-        memberName: currentValues.memberName,
-        memberContact: currentValues.memberContact,
-        assignedTo: currentValues.assignedTo,
-        team: currentValues.team,
-        sentiment: currentValues.sentiment,
-      });
+      await updateTicket(ticket.id, buildTicketEditPatch(ticket, editValues));
       setEditing(false);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : 'Unable to save ticket edits.');
     } finally {
       setSaving(false);
     }
@@ -275,7 +280,11 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
               onChange={(e) => {
                 const found = ASSOCIATES.find((a) => a.name === e.target.value);
                 if (editing) setEditValues((values) => ({ ...values, assignedTo: e.target.value, team: found?.team || ticket.team }));
-                else updateTicket(ticket.id, { assignedTo: e.target.value, team: found?.team || ticket.team });
+                else {
+                  setEditError('');
+                  updateTicket(ticket.id, { assignedTo: e.target.value, team: found?.team || ticket.team })
+                    .catch((error) => setEditError(error instanceof Error ? error.message : 'Unable to update assignment.'));
+                }
               }}
               className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 text-slate-900 dark:text-slate-100"
             >
@@ -286,6 +295,12 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
               ))}
             </select>
           </div>
+
+          {editError && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+              {editError}
+            </div>
+          )}
 
           <div>
             <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2 block">Description</label>
@@ -312,6 +327,10 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
                 <EditText label="Contact" value={currentValues.memberContact || ''} onChange={(value) => setEditValues((state) => ({ ...state, memberContact: value || undefined }))} />
                 <EditSelect label="Instructor" value={currentValues.trainer || ''} values={['', ...TRAINERS]} onChange={(value) => setEditValues((state) => ({ ...state, trainer: value || undefined }))} />
                 <EditSelect label="Session" value={currentValues.classType || ''} values={['', ...CLASS_TYPES]} onChange={(value) => setEditValues((state) => ({ ...state, classType: value || undefined }))} />
+                <EditText label="Session Time" value={toDateTimeLocalInputValue(currentValues.classDateTime)} type="datetime-local" onChange={(value) => setEditValues((state) => ({ ...state, classDateTime: value || undefined }))} />
+                <EditText label="Reported By" value={currentValues.reportedBy || ''} onChange={(value) => setEditValues((state) => ({ ...state, reportedBy: value || undefined }))} />
+                <EditSelect label="Sentiment" value={currentValues.sentiment || ''} values={['', 'Positive', 'Neutral', 'Negative', 'Angry']} onChange={(value) => setEditValues((state) => ({ ...state, sentiment: value ? value as Ticket['sentiment'] : undefined }))} />
+                <EditText label="Tags" value={(currentValues.tags || []).join(', ')} onChange={(value) => setEditValues((state) => ({ ...state, tags: tagsFromInput(value) }))} />
               </>
             ) : (
               <>
@@ -327,7 +346,7 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
             {ticket.sentiment && <Field icon={<MessageSquare className="w-3.5 h-3.5" />} label="Sentiment" value={ticket.sentiment} />}
           </div>
 
-          {(ticket.memberName || ticket.memberContact || ticket.classType || ticket.classDateTime || ticket.trainer) && (
+          {!editing && (ticket.memberName || ticket.memberContact || ticket.classType || ticket.classDateTime || ticket.trainer) && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/40">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">

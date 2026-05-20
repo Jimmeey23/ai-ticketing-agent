@@ -131,7 +131,7 @@ create policy "Authenticated users can update accessible tickets"
 on public.tickets for update
 to authenticated
 using (public.can_access_ticket(created_by, assigned_to))
-with check (public.can_access_ticket(created_by, assigned_to));
+with check (auth.uid() is not null);
 
 drop policy if exists "Authenticated users can delete tickets" on public.tickets;
 drop policy if exists "Admins and creators can delete tickets" on public.tickets;

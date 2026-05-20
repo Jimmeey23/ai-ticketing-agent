@@ -203,7 +203,7 @@ const ASSIGNMENT_RULES: Record<string, { assignedTo: string; team: string }> = {
   'Studio Amenities and Facilities': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
   'Operating Systems': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
   'Tech Issues': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
-  'Pricing and Memberships': { assignedTo: 'Pujal Jathar', team: 'Accounts' },
+  'Pricing and Memberships': { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' },
   'Customer Service and Communication': { assignedTo: 'Nunu Yeptomi', team: 'Customer Service' },
   'Brand Feedback': { assignedTo: 'Saachi Shetty', team: 'Marketing' },
   'Safety and Security': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
@@ -212,7 +212,7 @@ const ASSIGNMENT_RULES: Record<string, { assignedTo: string; team: string }> = {
   'Instructor & Class Quality': { assignedTo: 'Anisha Shah', team: 'Training' },
   'Booking & Schedule': { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' },
   'Facility & Equipment': { assignedTo: 'Zahur Shaikh', team: 'Operations' },
-  'Billing & Membership': { assignedTo: 'Pujal Jathar', team: 'Accounts' },
+  'Billing & Membership': { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' },
   'Safety & Medical': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
   'Front Desk & Service': { assignedTo: 'Nunu Yeptomi', team: 'Customer Service' },
   'App & Digital': { assignedTo: 'Saachi Shetty - Operations', team: 'Operations' },
@@ -237,14 +237,14 @@ function isRefundRouting(category: string, subCategory?: string | null): boolean
 
 function resolveSalesAssignment(studio?: string | null): { assignedTo: string; team: string } {
   if (isBengaluruStudio(studio)) return { assignedTo: 'Yashas K', team: 'Sales & Client Servicing' };
-  if (isBandraStudio(studio)) return { assignedTo: 'Deesha Changwani', team: 'Sales & Client Servicing' };
+  if (isBandraStudio(studio)) return { assignedTo: 'Imran Shaikh', team: 'Sales & Client Servicing' };
   return { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' };
 }
 
 function resolveAssignment(category: string, studio?: string | null, subCategory?: string | null): { assignedTo: string; team: string } {
   if (isRefundRouting(category, subCategory)) return resolveSalesAssignment(studio);
 
-  if (['Scheduling', 'Booking & Schedule', 'Front Desk & Service', 'Customer Service and Communication', 'Sales & Consultation'].includes(category)) {
+  if (['Scheduling', 'Booking & Schedule', 'Front Desk & Service', 'Customer Service and Communication', 'Sales & Consultation', 'Billing & Membership', 'Pricing and Memberships'].includes(category)) {
     return resolveSalesAssignment(studio);
   }
 
