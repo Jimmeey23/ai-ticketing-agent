@@ -330,20 +330,12 @@ const WorkspacePanel: React.FC<{ title: string; description: string; children: R
   </div>
 );
 
-const StatCard: React.FC<{ label: string; value: string | number; tone?: 'default' | 'danger' | 'blue' | 'green' }> = ({ label, value, tone = 'default' }) => {
-  const toneClass = {
-    default: 'text-stone-950',
-    danger: 'text-red-700',
-    blue: 'text-blue-700',
-    green: 'text-emerald-700',
-  }[tone];
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_16px_44px_rgba(15,23,42,0.06)]">
-      <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-stone-400">{label}</div>
-      <div className={`mt-2 text-3xl font-semibold ${toneClass}`}>{value}</div>
-    </div>
-  );
-};
+const StatCard: React.FC<{ label: string; value: string | number; tone?: 'default' | 'danger' | 'blue' | 'green' }> = ({ label, value }) => (
+  <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_16px_44px_rgba(15,23,42,0.06)]">
+    <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-stone-400">{label}</div>
+    <div className="mt-2 text-3xl font-semibold text-stone-950">{value}</div>
+  </div>
+);
 
 const TriageQueuePanel: React.FC = () => {
   const { tickets, setSelectedTicket } = useTickets();
@@ -619,14 +611,14 @@ const TriageTable: React.FC<{ title: string; tickets: Ticket[]; onOpen: (ticket:
           type="button"
           key={ticket.id}
           onClick={() => onOpen(ticket)}
-          className="grid w-full gap-3 px-4 py-3 text-left transition hover:bg-slate-50 md:grid-cols-[1fr_120px_120px_140px]"
+          className="grid w-full gap-3 px-4 py-3 text-left transition hover:text-slate-950 md:grid-cols-[1fr_120px_120px_140px]"
         >
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-950">{ticket.title}</div>
             <div className="mt-0.5 truncate text-xs text-slate-500">{ticket.id} · {ticket.category} / {ticket.subCategory}</div>
           </div>
-          <StatusPill value={ticket.priority} tone={ticket.priority === 'Critical' || ticket.priority === 'High' ? 'red' : 'blue'} />
-          <StatusPill value={getSlaState(ticket)} tone={getSlaState(ticket) === 'Breached' ? 'red' : getSlaState(ticket) === 'At Risk' ? 'violet' : 'green'} />
+          <PlainDataValue value={ticket.priority} />
+          <PlainDataValue value={getSlaState(ticket)} />
           <div className="truncate text-xs font-medium text-slate-600">{ticket.assignedTo}</div>
         </button>
       ))}
@@ -645,10 +637,14 @@ const StatusPill: React.FC<{ value: string; tone: 'red' | 'blue' | 'violet' | 'g
   return <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-semibold ${className}`}>{value}</span>;
 };
 
-const SignalRow: React.FC<{ label: string; value: number; tone: 'red' | 'blue' | 'violet' | 'green' }> = ({ label, value, tone }) => (
+const PlainDataValue: React.FC<{ value: string }> = ({ value }) => (
+  <span className="truncate text-xs font-medium text-slate-700">{value}</span>
+);
+
+const SignalRow: React.FC<{ label: string; value: number; tone: 'red' | 'blue' | 'violet' | 'green' }> = ({ label, value }) => (
   <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3 last:border-0">
     <span className="text-sm font-medium text-slate-600">{label}</span>
-    <StatusPill value={String(value)} tone={tone} />
+    <span className="text-sm font-semibold tabular-nums text-slate-950">{value}</span>
   </div>
 );
 
@@ -656,7 +652,6 @@ const BreakdownCard: React.FC<{ title: string; items: Array<{ name: string; valu
   title,
   items,
   total,
-  color,
   compact,
 }) => {
   const max = Math.max(1, ...items.map((item) => item.value));
@@ -674,7 +669,7 @@ const BreakdownCard: React.FC<{ title: string; items: Array<{ name: string; valu
               <span className="font-mono text-slate-500">{item.value}</span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-              <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.max(6, (item.value / max) * 100)}%` }} />
+              <div className="h-full rounded-full bg-slate-700" style={{ width: `${Math.max(6, (item.value / max) * 100)}%` }} />
             </div>
           </div>
         ))}
@@ -692,7 +687,7 @@ const TrendCard: React.FC<{ title: string; items: Array<{ name: string; value: n
       <div className="mt-4 flex h-28 items-end gap-2">
         {items.map((item) => (
           <div key={item.name} className="flex min-w-0 flex-1 flex-col items-center gap-2">
-            <div className="w-full rounded-t-lg bg-blue-600" style={{ height: `${Math.max(8, (item.value / max) * 100)}%` }} />
+            <div className="w-full rounded-t-lg bg-slate-700" style={{ height: `${Math.max(8, (item.value / max) * 100)}%` }} />
             <div className="truncate text-[10px] text-slate-400">{item.name}</div>
           </div>
         ))}

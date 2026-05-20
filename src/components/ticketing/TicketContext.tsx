@@ -1,9 +1,14 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { ASSOCIATES, getEmployee, getEscalationTarget, isTicketBreached, PRIORITY_SLA, resolveTicketAssignee, resolveTicketDepartment, Ticket, TicketMetadata, TicketResolutionDetail } from '@/lib/ticketing-data';
+import { ASSOCIATES, getEmployee, getEscalationTarget, isTicketBreached, PRIORITY_SLA, resolveTicketAssignee, resolveTicketDepartment, Ticket } from '@/lib/ticketing-data';
 import { backendSupabase } from '@/lib/backend-supabase';
 import { useBackendAuth } from '@/contexts/BackendAuthContext';
 import { ResolvedAssignment, resolveConfiguredAssignment } from '@/lib/routing-settings';
 import { canUpdateTicketStatus as canUpdateTicketStatusForIdentity } from '@/lib/ticket-permissions';
+import {
+  buildTicketResolutionDetail,
+  mergeTicketResolutionMetadata,
+  validateTicketStatusUpdate,
+} from '@/lib/ticket-status-lifecycle';
 import {
   dismissedNotificationIdsFromRows,
   loadDismissedNotificationIds,
@@ -502,41 +507,6 @@ function manualInputToDraft(input: ManualTicketInput, reporterName: string): Dra
   };
 }
 
-function cleanResolutionText(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
-function buildResolutionDetail(
-  current: Ticket,
-  input: TicketStatusUpdateInput,
-  actor: string
-): TicketResolutionDetail {
-  return {
-    status: input.status,
-    previousStatus: current.status,
-    reason: input.reason.trim(),
-    actionTaken: input.actionTaken.trim(),
-    actionDate: input.actionDate || new Date().toISOString().slice(0, 10),
-    followUpDate: cleanResolutionText(input.followUpDate),
-    comments: cleanResolutionText(input.comments),
-    notes: cleanResolutionText(input.notes),
-    actor,
-    createdAt: new Date().toISOString(),
-  };
-}
-
-function mergeResolutionMetadata(metadata: TicketMetadata | undefined, detail: TicketResolutionDetail): TicketMetadata {
-  const history = Array.isArray(metadata?.resolutionHistory)
-    ? metadata.resolutionHistory.filter(Boolean)
-    : [];
-  return {
-    ...(metadata || {}),
-    latestResolution: detail,
-    resolutionHistory: [detail, ...history].slice(0, 25),
-  };
-}
-
 export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, profile, accessRole } = useBackendAuth();
   const [liveTickets, setLiveTickets] = useState<Ticket[]>([]);
@@ -896,14 +866,13 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (!canUpdateTicketStatus(current)) {
         throw new Error('Only the assigned ticket owner or an admin can change this ticket status.');
       }
-      if (!detail.reason.trim() || !detail.actionTaken.trim()) {
-        throw new Error('Status changes require a reason and action taken.');
-      }
+      const validationErrors = validateTicketStatusUpdate(current, detail);
+      if (validationErrors.length > 0) throw new Error(validationErrors.join(' '));
 
-      const resolution = buildResolutionDetail(current, detail, actor);
+      const resolution = buildTicketResolutionDetail(current, detail, actor);
       await updateTicket(id, {
         status: detail.status,
-        metadata: mergeResolutionMetadata(current.metadata, resolution),
+        metadata: mergeTicketResolutionMetadata(current.metadata, resolution),
       }, actor);
     },
     [canUpdateTicketStatus, tickets, updateTicket, user]

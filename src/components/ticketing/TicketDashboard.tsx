@@ -100,7 +100,7 @@ const GROUP_OPTIONS: Array<{ value: GroupBy; label: string }> = [
   { value: 'member', label: 'Member' },
 ];
 
-const CHART_COLORS = ['#2563eb', '#7c3aed', '#059669', '#dc2626', '#0891b2', '#475569'];
+const CHART_COLORS = ['#0f172a', '#334155', '#475569', '#64748b', '#94a3b8', '#cbd5e1'];
 
 export const TicketDashboard: React.FC = () => {
   const { tickets, setSelectedTicket, loading, error, refresh, createManualTicket } = useTickets();
@@ -181,9 +181,9 @@ export const TicketDashboard: React.FC = () => {
 
         <div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-5">
           <StatTile label="Open" value={stats.open} icon={<Circle className="h-4 w-4" />} />
-          <StatTile label="Critical" value={stats.critical} icon={<Flame className="h-4 w-4" />} tone="danger" />
-          <StatTile label="Breached" value={stats.breached} icon={<AlertTriangle className="h-4 w-4" />} tone="warning" />
-          <StatTile label="Resolved" value={stats.resolved} icon={<CheckCircle2 className="h-4 w-4" />} tone="success" />
+          <StatTile label="Critical" value={stats.critical} icon={<Flame className="h-4 w-4" />} />
+          <StatTile label="Breached" value={stats.breached} icon={<AlertTriangle className="h-4 w-4" />} />
+          <StatTile label="Resolved" value={stats.resolved} icon={<CheckCircle2 className="h-4 w-4" />} />
           <StatTile label="Visible" value={`${stats.visible}/${stats.total}`} icon={<ListFilter className="h-4 w-4" />} />
         </div>
 
@@ -581,7 +581,7 @@ const TableView: React.FC<{ tickets: Ticket[]; onOpen: (ticket: Ticket) => void 
               <tr
                 key={ticket.id}
                 onClick={() => onOpen(ticket)}
-                className="cursor-pointer bg-white transition hover:bg-slate-50 dark:bg-stone-900 dark:hover:bg-stone-800"
+                className="cursor-pointer transition hover:text-slate-950 dark:hover:text-white"
               >
                 <Td>
                   <div className="min-w-0">
@@ -589,9 +589,9 @@ const TableView: React.FC<{ tickets: Ticket[]; onOpen: (ticket: Ticket) => void 
                     <div className="mt-0.5 truncate text-[11px] text-stone-500">{ticket.id}</div>
                   </div>
                 </Td>
-                <Td><Pill>{ticket.status}</Pill></Td>
-                <Td><PriorityPill priority={ticket.priority} /></Td>
-                <Td><SlaPill state={sla} /></Td>
+                <Td><PlainTableValue value={ticket.status} /></Td>
+                <Td><PlainTableValue value={ticket.priority} /></Td>
+                <Td><PlainTableValue value={sla} /></Td>
                 <Td><Truncate value={ticket.memberName || '-'} /></Td>
                 <Td><Truncate value={ticket.studio || '-'} /></Td>
                 <Td>
@@ -623,9 +623,9 @@ const Truncate: React.FC<{ value: string }> = ({ value }) => (
   <span className="block min-w-0 truncate" title={value}>{value}</span>
 );
 
-const Pill: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <span className="inline-flex max-w-full rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">
-    {children}
+const PlainTableValue: React.FC<{ value: string }> = ({ value }) => (
+  <span className="block truncate font-medium text-stone-800 dark:text-stone-200" title={value}>
+    {value}
   </span>
 );
 
@@ -870,44 +870,16 @@ const StatTile: React.FC<{ label: string; value: number | string; icon: React.Re
   label,
   value,
   icon,
-  tone = 'default',
 }) => {
-  const toneClass = {
-    default: {
-      card: 'border-slate-200 bg-white text-slate-900',
-      icon: 'bg-blue-50 text-blue-600',
-      bar: 'bg-blue-600',
-    },
-    danger: {
-      card: 'border-red-200 bg-white text-red-700',
-      icon: 'bg-red-50 text-red-600',
-      bar: 'bg-red-600',
-    },
-    warning: {
-      card: 'border-violet-200 bg-white text-violet-700',
-      icon: 'bg-violet-50 text-violet-600',
-      bar: 'bg-violet-600',
-    },
-    success: {
-      card: 'border-emerald-200 bg-white text-emerald-700',
-      icon: 'bg-emerald-50 text-emerald-600',
-      bar: 'bg-emerald-600',
-    },
-  }[tone];
-
   return (
-    <div className={`group relative overflow-hidden rounded-2xl border px-4 py-3 shadow-[0_16px_42px_rgba(15,23,42,0.07)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_22px_58px_rgba(15,23,42,0.1)] ${toneClass.card}`}>
-      <div className={`absolute inset-x-0 top-0 h-1 ${toneClass.bar}`} />
+    <div className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-[0_14px_34px_rgba(15,23,42,0.06)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_44px_rgba(15,23,42,0.09)]">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">{label}</span>
-        <span className={`flex h-8 w-8 items-center justify-center rounded-xl ${toneClass.icon}`}>
+        <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
           {icon}
         </span>
       </div>
       <div className="mt-2 text-3xl font-semibold tracking-tight">{value}</div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
-        <div className={`h-full w-2/3 rounded-full ${toneClass.bar}`} />
-      </div>
     </div>
   );
 };

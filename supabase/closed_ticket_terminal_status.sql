@@ -1,17 +1,4 @@
--- Enforce owner/admin-only ticket status changes.
--- Run after the base ticketing schema/access-level SQL.
-
-create or replace function public.can_update_ticket_status(ticket_assigned_to text)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select
-    public.current_user_role() = 'admin'
-    or lower(coalesce(ticket_assigned_to, '')) = any(public.current_user_assignment_keys());
-$$;
+-- Enforce ticket lifecycle details and prevent reopening tickets after they are Closed.
 
 create or replace function public.enforce_ticket_status_owner()
 returns trigger

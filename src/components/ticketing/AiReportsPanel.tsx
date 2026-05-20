@@ -677,7 +677,7 @@ const SourceRowsTableMarkup: React.FC<{
             <tr
               key={row.ticketId}
               onClick={() => interactive && ticket && onOpen(ticket)}
-              className={`h-16 border-b border-slate-100 ${interactive && ticket ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+              className={`h-16 border-b border-slate-100 ${interactive && ticket ? 'cursor-pointer hover:text-slate-950' : ''}`}
             >
               <td className="h-16 px-4 py-2 align-middle">
                 <div className="flex h-10 min-w-0 flex-col justify-center">
@@ -685,10 +685,10 @@ const SourceRowsTableMarkup: React.FC<{
                   <div className="mt-0.5 font-mono text-[11px] text-slate-400">{row.ticketId}</div>
                 </div>
               </td>
-              <td className="h-16 whitespace-nowrap px-4 py-2 align-middle"><ReportBadge tone={badgeToneFor(row.status)} minWidth="min-w-[88px]">{row.status}</ReportBadge></td>
-              <td className="h-16 whitespace-nowrap px-4 py-2 align-middle"><ReportBadge tone={badgeToneFor(row.priority)} minWidth="min-w-[72px]">{row.priority}</ReportBadge></td>
-              <td className="h-16 whitespace-nowrap px-4 py-2 align-middle"><ReportBadge tone={badgeToneFor(row.slaState)} minWidth="min-w-[88px]">{row.slaState}</ReportBadge></td>
-              <td className="h-16 whitespace-nowrap px-4 py-2 align-middle"><ReportBadge tone={badgeToneFor(row.sourceType)} minWidth="min-w-[72px]">{row.sourceType}</ReportBadge></td>
+              <td className="h-16 whitespace-nowrap px-4 py-2 align-middle font-medium text-slate-700">{row.status}</td>
+              <td className="h-16 whitespace-nowrap px-4 py-2 align-middle font-medium text-slate-700">{row.priority}</td>
+              <td className="h-16 whitespace-nowrap px-4 py-2 align-middle font-medium text-slate-700">{row.slaState}</td>
+              <td className="h-16 whitespace-nowrap px-4 py-2 align-middle font-medium text-slate-700">{row.sourceType}</td>
               <td className="h-16 px-4 py-2 align-middle">
                 <div className="flex h-10 min-w-0 flex-col justify-center">
                   <div className="truncate font-medium text-slate-700" title={row.category}>{row.category}</div>

@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Ticket, PRIORITY_SLA, STATUSES, ASSOCIATES, CATEGORIES, STUDIOS, CLASS_TYPES, TRAINERS, getEscalationTarget } from '@/lib/ticketing-data';
 import { buildTicketEditPatch } from '@/lib/ticket-editing';
+import { canSelectStatusFromTicket, validateTicketStatusUpdate } from '@/lib/ticket-status-lifecycle';
 import { TicketStatusUpdateInput } from './TicketContext';
 import { useTickets } from './useTickets';
-import { X, Clock, MapPin, User, Calendar, Tag, MessageSquare, Phone, Lock, Pencil, Save, Trash2, Link2 } from 'lucide-react';
+import { X, Clock, MapPin, User, Calendar, Tag, MessageSquare, Phone, Lock, Pencil, Save, Trash2, Link2, Plus } from 'lucide-react';
 import { MomenceAutomationPanel } from './MomenceAutomationPanel';
 
 interface Props {
@@ -32,9 +33,11 @@ function defaultStatusValues(ticket?: Ticket | null): TicketStatusUpdateInput {
     reason: '',
     actionTaken: '',
     actionDate: new Date().toISOString().slice(0, 10),
-    followUpDate: '',
+    followUps: [],
     comments: '',
     notes: '',
+    resolutionSummary: '',
+    outcome: '',
   };
 }
 
@@ -78,8 +81,23 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
   const subCategories = CATEGORIES[currentValues.category || ticket.category] || ['Other'];
   const statusAllowed = canUpdateTicketStatus(ticket);
   const statusChanged = statusValues.status !== ticket.status;
-  const statusReady = statusAllowed && statusChanged && Boolean(statusValues.reason.trim()) && Boolean(statusValues.actionTaken.trim());
+  const statusValidationErrors = statusAllowed ? validateTicketStatusUpdate(ticket, statusValues) : [];
+  const statusInputStarted = statusChanged ||
+    Boolean(statusValues.reason.trim()) ||
+    Boolean(statusValues.actionTaken.trim()) ||
+    Boolean(statusValues.resolutionSummary?.trim()) ||
+    Boolean(statusValues.outcome?.trim()) ||
+    Boolean(statusValues.comments?.trim()) ||
+    Boolean(statusValues.notes?.trim()) ||
+    Boolean((statusValues.followUps || []).some((followUp) => followUp.date?.trim() || followUp.notes?.trim()));
+  const statusReady = statusAllowed && statusValidationErrors.length === 0;
   const latestResolution = ticket.metadata?.latestResolution;
+  const resolutionHistory = Array.isArray(ticket.metadata?.resolutionHistory)
+    ? ticket.metadata.resolutionHistory
+    : [];
+  const followUpHistory = Array.isArray(ticket.metadata?.followUpHistory)
+    ? ticket.metadata.followUpHistory
+    : [];
   const ticketAttachments = readTicketAttachments(ticket);
 
   const saveEdits = async () => {
@@ -103,7 +121,10 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
 
   const submitStatusUpdate = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!statusReady) return;
+    if (!statusReady) {
+      setStatusError(statusValidationErrors.join(' '));
+      return;
+    }
     setStatusSaving(true);
     setStatusError('');
     try {
@@ -176,7 +197,7 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
               <div>
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Status and resolution</label>
                 <p className="mt-1 text-xs text-slate-500">
-                  Status changes require owner/admin access plus reason and action taken.
+                  Status changes require reason and action taken. Follow-up-only saves need a complete date and note.
                 </p>
               </div>
               <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
@@ -194,7 +215,7 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
               <EditSelect
                 label="New status"
                 value={statusValues.status}
-                values={STATUSES}
+                values={STATUSES.filter((status) => canSelectStatusFromTicket(ticket, status))}
                 disabled={!statusAllowed}
                 onChange={(status) => setStatusValues((values) => ({ ...values, status: status as Ticket['status'] }))}
               />
@@ -222,13 +243,28 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
                   onChange={(actionTaken) => setStatusValues((values) => ({ ...values, actionTaken }))}
                 />
               </div>
-              <EditText
-                label="Follow-up date"
-                value={statusValues.followUpDate || ''}
-                type="date"
-                disabled={!statusAllowed}
-                onChange={(followUpDate) => setStatusValues((values) => ({ ...values, followUpDate }))}
-              />
+              {(statusValues.status === 'Resolved' || statusValues.status === 'Closed') && (
+                <>
+                  <div className="md:col-span-2">
+                    <EditTextarea
+                      label="Resolution summary"
+                      value={statusValues.resolutionSummary || ''}
+                      rows={3}
+                      disabled={!statusAllowed}
+                      onChange={(resolutionSummary) => setStatusValues((values) => ({ ...values, resolutionSummary }))}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <EditTextarea
+                      label="Final outcome"
+                      value={statusValues.outcome || ''}
+                      rows={3}
+                      disabled={!statusAllowed}
+                      onChange={(outcome) => setStatusValues((values) => ({ ...values, outcome }))}
+                    />
+                  </div>
+                </>
+              )}
               <EditText
                 label="Comments"
                 value={statusValues.comments || ''}
@@ -244,6 +280,72 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
                   onChange={(notes) => setStatusValues((values) => ({ ...values, notes }))}
                 />
               </div>
+              <div className="md:col-span-2">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Follow-up dates and notes</label>
+                  <button
+                    type="button"
+                    disabled={!statusAllowed}
+                    onClick={() => setStatusValues((values) => ({
+                      ...values,
+                      followUps: [...(values.followUps || []), { date: '', notes: '' }],
+                    }))}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add follow-up
+                  </button>
+                </div>
+                {(statusValues.followUps || []).length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-xs text-slate-500">
+                    No follow-up dates added.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {(statusValues.followUps || []).map((followUp, index) => (
+                      <div key={index} className="grid gap-2 rounded-xl border border-slate-200 bg-white p-2 md:grid-cols-[150px_1fr_auto]">
+                        <input
+                          type="date"
+                          value={followUp.date || ''}
+                          disabled={!statusAllowed}
+                          onChange={(event) => setStatusValues((values) => ({
+                            ...values,
+                            followUps: (values.followUps || []).map((item, itemIndex) => (
+                              itemIndex === index ? { ...item, date: event.target.value } : item
+                            )),
+                          }))}
+                          className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm text-stone-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-100 disabled:text-slate-500"
+                        />
+                        <textarea
+                          value={followUp.notes || ''}
+                          rows={2}
+                          disabled={!statusAllowed}
+                          placeholder="Follow-up note"
+                          onChange={(event) => setStatusValues((values) => ({
+                            ...values,
+                            followUps: (values.followUps || []).map((item, itemIndex) => (
+                              itemIndex === index ? { ...item, notes: event.target.value } : item
+                            )),
+                          }))}
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-stone-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-100 disabled:text-slate-500"
+                        />
+                        <button
+                          type="button"
+                          disabled={!statusAllowed}
+                          onClick={() => setStatusValues((values) => ({
+                            ...values,
+                            followUps: (values.followUps || []).filter((_, itemIndex) => itemIndex !== index),
+                          }))}
+                          className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          aria-label="Remove follow-up"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {latestResolution && (
@@ -251,13 +353,50 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
                 <div className="font-semibold text-slate-800">Latest resolution note</div>
                 <div className="mt-1">Reason: {latestResolution.reason}</div>
                 <div className="mt-0.5">Action: {latestResolution.actionTaken}</div>
-                {latestResolution.followUpDate && <div className="mt-0.5">Follow-up: {latestResolution.followUpDate}</div>}
+                {latestResolution.resolutionSummary && <div className="mt-0.5">Resolution: {latestResolution.resolutionSummary}</div>}
+                {latestResolution.outcome && <div className="mt-0.5">Outcome: {latestResolution.outcome}</div>}
+                {latestResolution.closedAt && <div className="mt-0.5">Closed: {new Date(latestResolution.closedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</div>}
+              </div>
+            )}
+
+            {followUpHistory.length > 0 && (
+              <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                <div className="font-semibold text-slate-800">Saved follow-ups</div>
+                <div className="mt-2 space-y-1.5">
+                  {followUpHistory.slice(0, 8).map((followUp, index) => (
+                    <div key={`${followUp.date}-${followUp.createdAt}-${index}`} className="grid gap-1 border-t border-slate-100 pt-1.5 first:border-t-0 first:pt-0 md:grid-cols-[110px_1fr]">
+                      <span className="font-semibold text-slate-700">{followUp.date}</span>
+                      <span>{followUp.notes}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {resolutionHistory.length > 1 && (
+              <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                <div className="font-semibold text-slate-800">Resolution history</div>
+                <div className="mt-2 space-y-2">
+                  {resolutionHistory.slice(1, 6).map((entry, index) => (
+                    <div key={`${entry.createdAt}-${index}`} className="border-t border-slate-100 pt-2 first:border-t-0 first:pt-0">
+                      <div className="font-semibold text-slate-700">{entry.previousStatus} → {entry.status}</div>
+                      <div className="mt-0.5">{entry.actionTaken}</div>
+                      {entry.resolutionSummary && <div className="mt-0.5 text-slate-500">{entry.resolutionSummary}</div>}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
             {statusError && (
               <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
                 {statusError}
+              </div>
+            )}
+
+            {!statusError && statusInputStarted && statusValidationErrors.length > 0 && (
+              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                {statusValidationErrors.join(' ')}
               </div>
             )}
 
@@ -268,7 +407,7 @@ export const TicketDetailDrawer: React.FC<Props> = ({ ticket, onClose }) => {
                 className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Save className="h-3.5 w-3.5" />
-                {statusSaving ? 'Saving...' : 'Save status update'}
+                {statusSaving ? 'Saving...' : 'Save ticket update'}
               </button>
             </div>
           </form>

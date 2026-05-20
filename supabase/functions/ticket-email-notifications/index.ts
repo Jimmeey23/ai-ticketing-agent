@@ -178,6 +178,14 @@ function smtpTransport() {
   });
 }
 
+function senderFromHeader(): string {
+  const senderName = optionalEnv('MAILTRAP_FROM_NAME', 'SMTP_FROM_NAME') || 'Physique 57 Support Desk';
+  const configuredFrom = optionalEnv('MAILTRAP_FROM_EMAIL', 'SMTP_FROM_EMAIL') || 'athena@physique57india.com';
+  const emailMatch = configuredFrom.match(/<([^>]+)>/);
+  const email = (emailMatch?.[1] || configuredFrom).trim();
+  return `${senderName} <${email}>`;
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -275,7 +283,7 @@ Deno.serve(async (request) => {
 
     try {
       await smtpTransport().sendMail({
-        from: optionalEnv('MAILTRAP_FROM_EMAIL', 'SMTP_FROM_EMAIL') || 'Athena <athena@physique57india.com>',
+        from: senderFromHeader(),
         to: owner.email,
         cc: escalation?.email && escalation.email !== owner.email ? escalation.email : undefined,
         subject: email.subject,

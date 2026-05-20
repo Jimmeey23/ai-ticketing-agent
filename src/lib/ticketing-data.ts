@@ -735,6 +735,14 @@ export function resolveTicketDepartment(category: string, assignedTo: string): s
   return 'Customer Service';
 }
 
+export interface TicketFollowUpDetail {
+  date: string;
+  notes: string;
+  status?: typeof STATUSES[number];
+  actor?: string;
+  createdAt: string;
+}
+
 export interface TicketResolutionDetail {
   status: typeof STATUSES[number];
   previousStatus?: typeof STATUSES[number];
@@ -742,8 +750,13 @@ export interface TicketResolutionDetail {
   actionTaken: string;
   actionDate: string;
   followUpDate?: string;
+  followUps?: TicketFollowUpDetail[];
   comments?: string;
   notes?: string;
+  resolutionSummary?: string;
+  outcome?: string;
+  resolvedAt?: string;
+  closedAt?: string;
   actor?: string;
   createdAt: string;
 }
@@ -751,6 +764,9 @@ export interface TicketResolutionDetail {
 export interface TicketMetadata {
   latestResolution?: TicketResolutionDetail;
   resolutionHistory?: TicketResolutionDetail[];
+  followUpHistory?: TicketFollowUpDetail[];
+  resolvedAt?: string;
+  closedAt?: string;
   [key: string]: unknown;
 }
 

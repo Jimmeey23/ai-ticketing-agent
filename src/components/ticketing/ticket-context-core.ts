@@ -18,8 +18,14 @@ export interface TicketStatusUpdateInput {
   actionTaken: string;
   actionDate: string;
   followUpDate?: string;
+  followUps?: Array<{
+    date?: string;
+    notes?: string;
+  }>;
   comments?: string;
   notes?: string;
+  resolutionSummary?: string;
+  outcome?: string;
 }
 
 export interface ApprovedTicketDraft {
