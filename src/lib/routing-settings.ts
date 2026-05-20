@@ -170,6 +170,7 @@ const TRAINING_CATEGORIES = ['Class Experience', 'Trainer Feedback', 'Instructor
 const ACCOUNTS_CATEGORIES = ['Billing & Membership', 'Pricing and Memberships'];
 const MARKETING_CATEGORIES = ['Hosted Class & Partnerships'];
 const BRAND_CATEGORIES = ['Brand Feedback'];
+const REFUND_CATEGORIES = ['Billing & Membership', 'Pricing and Memberships'];
 
 function createRule(
   category: string,
@@ -192,6 +193,35 @@ function createRule(
     priority,
     slaHours: PRIORITY_SLA[priority].hours,
     active: true,
+  };
+}
+
+function isRefundRouting(category: string, subCategory?: string): boolean {
+  return REFUND_CATEGORIES.includes(category) && /refund/i.test(subCategory || '');
+}
+
+function salesOwnersForStudio(studio?: string): { owners: string[]; escalation: string } {
+  const normalizedStudio = String(studio || '').toLowerCase();
+  if (inferRoutingCity(studio) === 'Bengaluru') {
+    return { owners: ROUTING_PRESET_GROUPS.bengaluruSales, escalation: 'Shifa Ali' };
+  }
+  if (/bandra|supreme/.test(normalizedStudio)) {
+    return { owners: ROUTING_PRESET_GROUPS.bandraSales, escalation: 'Jimmeey Gondaa' };
+  }
+  return { owners: ROUTING_PRESET_GROUPS.kwalitySales, escalation: 'Jimmeey Gondaa' };
+}
+
+function resolveRefundAssignment(studio?: string): ResolvedAssignment {
+  const { owners, escalation } = salesOwnersForStudio(studio);
+  const assignedTo = owners[0];
+  return {
+    assignedTo,
+    ownerPool: owners,
+    team: 'Sales & Client Servicing',
+    nextEscalation: escalation,
+    priority: 'High',
+    slaHours: PRIORITY_SLA.High.hours,
+    source: 'default_routing',
   };
 }
 
@@ -564,6 +594,10 @@ export function resolveAssignmentFromSettings(
   studio?: string,
   context?: AssignmentResolutionContext
 ): ResolvedAssignment {
+  if (isRefundRouting(category, subCategory)) {
+    return resolveRefundAssignment(studio);
+  }
+
   const best = settings.routingRules
     .map((rule) => ({ rule, score: specificity(rule, category, subCategory, studio) }))
     .filter((item) => item.score >= 0)

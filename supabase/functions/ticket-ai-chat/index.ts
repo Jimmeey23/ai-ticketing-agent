@@ -221,6 +221,7 @@ const ASSIGNMENT_RULES: Record<string, { assignedTo: string; team: string }> = {
   'Sales & Consultation': { assignedTo: 'Jimmeey Gondaa', team: 'Sales & Client Servicing' },
   'General Feedback': { assignedTo: 'Nunu Yeptomi', team: 'Customer Service' },
 };
+const REFUND_CATEGORIES = ['Billing & Membership', 'Pricing and Memberships'];
 
 function isBengaluruStudio(studio?: string | null): boolean {
   return /bengaluru|bangalore|copper/i.test(studio || '');
@@ -230,11 +231,21 @@ function isBandraStudio(studio?: string | null): boolean {
   return /bandra|supreme/i.test(studio || '');
 }
 
-function resolveAssignment(category: string, studio?: string | null): { assignedTo: string; team: string } {
+function isRefundRouting(category: string, subCategory?: string | null): boolean {
+  return REFUND_CATEGORIES.includes(category) && /refund/i.test(subCategory || '');
+}
+
+function resolveSalesAssignment(studio?: string | null): { assignedTo: string; team: string } {
+  if (isBengaluruStudio(studio)) return { assignedTo: 'Yashas K', team: 'Sales & Client Servicing' };
+  if (isBandraStudio(studio)) return { assignedTo: 'Deesha Changwani', team: 'Sales & Client Servicing' };
+  return { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' };
+}
+
+function resolveAssignment(category: string, studio?: string | null, subCategory?: string | null): { assignedTo: string; team: string } {
+  if (isRefundRouting(category, subCategory)) return resolveSalesAssignment(studio);
+
   if (['Scheduling', 'Booking & Schedule', 'Front Desk & Service', 'Customer Service and Communication', 'Sales & Consultation'].includes(category)) {
-    if (isBengaluruStudio(studio)) return { assignedTo: 'Yashas K', team: 'Sales & Client Servicing' };
-    if (isBandraStudio(studio)) return { assignedTo: 'Deesha Changwani', team: 'Sales & Client Servicing' };
-    return { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' };
+    return resolveSalesAssignment(studio);
   }
 
   if (['Facility & Equipment', 'Repair and Maintenance', 'Studio Amenities and Facilities', 'Safety and Security', 'Safety & Medical', 'Theft and Lost Items', 'Operating Systems', 'Tech Issues', 'App & Digital'].includes(category)) {
@@ -965,7 +976,7 @@ function buildSourceRef(draft: DraftTicket, context: Record<string, unknown> = {
 
 function toTicketRow(draft: DraftTicket, context: Record<string, unknown> = {}, conversationId?: string | null) {
   const priority = normalizePriority(draft.priority);
-  const assignment = resolveAssignment(draft.category, draft.studio);
+  const assignment = resolveAssignment(draft.category, draft.studio, draft.subCategory);
 
   return {
     source_ref: buildSourceRef(draft, context, conversationId),

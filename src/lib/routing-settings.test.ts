@@ -57,6 +57,42 @@ describe('routing settings', () => {
     });
   });
 
+  it('routes refund issues to Sales & Client Servicing instead of Accounts', () => {
+    const settings = defaultRoutingSettings();
+
+    expect(
+      resolveAssignmentFromSettings(
+        settings,
+        'Pricing and Memberships',
+        'Refund and Cancellation Policy Issue',
+        'Supreme HQ, Bandra'
+      )
+    ).toMatchObject({
+      assignedTo: 'Imran Shaikh',
+      ownerPool: ['Imran Shaikh', 'Shipra Pinge', 'Nadiya Shaikh', 'Deesha Changwani'],
+      team: 'Sales & Client Servicing',
+      nextEscalation: 'Jimmeey Gondaa',
+      priority: 'High',
+      slaHours: 8,
+    });
+
+    expect(
+      resolveAssignmentFromSettings(
+        settings,
+        'Billing & Membership',
+        'Refund Request',
+        'Kenkere House, Bengaluru'
+      )
+    ).toMatchObject({
+      assignedTo: 'Yashas K',
+      ownerPool: ['Yashas K', 'Sashi Singh', 'Api Serou', 'Prathap K P'],
+      team: 'Sales & Client Servicing',
+      nextEscalation: 'Shifa Ali',
+      priority: 'High',
+      slaHours: 8,
+    });
+  });
+
   it('uses a category-level rule for any subcategory in that category', () => {
     const settings: RoutingSettings = {
       departments: [],
@@ -111,9 +147,9 @@ describe('routing settings', () => {
           active: true,
         },
         {
-          id: 'billing-refund',
+          id: 'billing-invoice',
           category: 'Billing & Membership',
-          subCategory: 'Refund Request',
+          subCategory: 'Invoice / Receipt Request',
           location: '',
           owner: 'Gaurav Sogam',
           owners: ['Gaurav Sogam'],
@@ -127,7 +163,7 @@ describe('routing settings', () => {
     };
 
     expect(
-      resolveAssignmentFromSettings(settings, 'Billing & Membership', 'Refund Request', 'Physique 57, Mumbai')
+      resolveAssignmentFromSettings(settings, 'Billing & Membership', 'Invoice / Receipt Request', 'Physique 57, Mumbai')
     ).toMatchObject({
       assignedTo: 'Gaurav Sogam',
       priority: 'High',

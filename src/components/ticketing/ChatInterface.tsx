@@ -25,6 +25,8 @@ import {
   isMissingIntakeValue,
   IntakeContext,
 } from '@/lib/intake-rules';
+import { buildMasterDataLocationNames } from '@/lib/intake-master-data';
+import { shouldHoldDraftForMoreInfo } from '@/lib/intake-response-state';
 import {
   ASSOCIATES,
   CATEGORIES,
@@ -43,6 +45,7 @@ import {
   resolveTicketAssignee,
   resolveTicketDepartment,
 } from '@/lib/ticketing-data';
+import { findExistingSubmittedTicket } from '@/lib/ticket-duplicate-matching';
 
 interface SuggestedChip {
   label: string;
@@ -248,6 +251,7 @@ For membership/billing requests: require the member selection first, then ask ab
 
 ROUTING AND MASTER DATA:
 - Use only approved master-data values for studios, trainers, class types, categories, subcategories, priorities, and associates
+- For the studio field, treat masterData.studios as authoritative; masterData.locations may include routing/location aliases and must not invalidate a selected studio value
 - Use provided routingRules, employees, departments, and locations as authoritative — never invent names, escalation paths, or SLAs
 - Member and class/session fields must use Momence-powered UI pickers, not plain text inputs
 
@@ -869,115 +873,6 @@ function buildClientDraft(ctx: DetailContext, text: string): DraftTicket {
   };
 }
 
-function normalizeTicketSearchText(value: string): string[] {
-  return Array.from(
-    new Set(
-      value
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .split(/\s+/)
-        .filter((token) => token.length > 2 && ![
-          'the',
-          'and',
-          'for',
-          'with',
-          'from',
-          'this',
-          'that',
-          'member',
-          'client',
-          'class',
-          'studio',
-          'house',
-          'kwality',
-          'kemps',
-          'corner',
-          'bandra',
-          'mumbai',
-          'bengaluru',
-          'bangalore',
-        ].includes(token))
-    )
-  );
-}
-
-function ticketCategoryFamily(category?: string | null): string {
-  const value = (category || '').toLowerCase();
-  if (/(billing|membership|pricing|refund|payment|charge)/.test(value)) return 'billing';
-  if (/(facility|equipment|repair|amenit|safety|medical|theft|operating|tech|app)/.test(value)) return 'operations';
-  if (/(trainer|instructor|class experience|progress|transformation)/.test(value)) return 'class';
-  if (/(hosted|partnership|brand)/.test(value)) return 'partnership';
-  if (/(booking|schedule|front desk|service|sales|consultation)/.test(value)) return 'service';
-  return value || 'general';
-}
-
-function hasExactIdentityMatch(ctx: DetailContext, ticket: Ticket): boolean {
-  const memberName = ctx.memberName?.trim().toLowerCase();
-  const memberContact = ctx.memberContact?.trim().toLowerCase();
-  return Boolean(
-    (memberName && ticket.memberName?.toLowerCase() === memberName) ||
-    (memberContact && ticket.memberContact?.toLowerCase() === memberContact)
-  );
-}
-
-function hasCompatibleDuplicateCategory(ctx: DetailContext, ticket: Ticket): boolean {
-  if (!ctx.category) return true;
-  return ticketCategoryFamily(ctx.category) === ticketCategoryFamily(ticket.category);
-}
-
-function findExistingSubmittedTicket(text: string, ctx: DetailContext, tickets: Ticket[]): Ticket | null {
-  const explicitId = text.match(/\b(?:P57|TKT|TK)-?[A-Z0-9-]{3,}\b/i)?.[0]?.toLowerCase();
-  if (explicitId) {
-    const byId = tickets.find((ticket) => ticket.id.toLowerCase() === explicitId);
-    if (byId) return byId;
-  }
-
-  const inputTokens = normalizeTicketSearchText([
-    text,
-    ctx.memberName,
-    ctx.memberContact,
-    ctx.studio,
-    ctx.trainer,
-    ctx.classType,
-    ctx.category,
-    ctx.subCategory,
-  ].filter(Boolean).join(' '));
-  if (inputTokens.length < 4) return null;
-
-  let best: { ticket: Ticket; score: number } | null = null;
-  for (const ticket of tickets) {
-    const exactIdentityMatch = hasExactIdentityMatch(ctx, ticket);
-    if (!exactIdentityMatch && !hasCompatibleDuplicateCategory(ctx, ticket)) continue;
-
-    const haystackTokens = normalizeTicketSearchText([
-      ticket.id,
-      ticket.title,
-      ticket.description,
-      ticket.conversationSummary,
-      ticket.category,
-      ticket.subCategory,
-      ticket.memberName,
-      ticket.memberContact,
-      ticket.studio,
-      ticket.trainer,
-      ticket.classType,
-    ].filter(Boolean).join(' '));
-    const haystack = new Set(haystackTokens);
-    const overlap = inputTokens.filter((token) => haystack.has(token)).length;
-    const hasIssueOverlap = overlap >= 3;
-    const contextBoost =
-      (exactIdentityMatch ? 0.24 : 0) +
-      (ctx.studio && ticket.studio === ctx.studio ? 0.08 : 0) +
-      (ctx.trainer && ticket.trainer === ctx.trainer ? 0.08 : 0) +
-      (ctx.sessionId && ticket.sourceRef?.includes(ctx.sessionId) ? 0.18 : 0);
-    const score = overlap / Math.max(8, Math.min(inputTokens.length, haystackTokens.length)) + contextBoost;
-    const threshold = exactIdentityMatch ? 0.58 : 0.66;
-    if (hasIssueOverlap && score >= threshold && (!best || score > best.score)) best = { ticket, score };
-  }
-
-  return best?.ticket || null;
-}
-
 export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) => void; resetVersion?: number }> = ({ onOpenExistingTicket, resetVersion = 0 }) => {
   const { createApprovedTicket, tickets, setSelectedTicket } = useTickets();
   const { user } = useBackendAuth();
@@ -1274,7 +1169,7 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
             categories: CATEGORIES,
             routingRules: routingSettings.routingRules.filter((rule) => rule.active).slice(0, 260),
             departments: routingSettings.departments.filter((department) => department.active).map((department) => department.name),
-            locations: routingSettings.locations.filter((location) => location.active).map((location) => location.name),
+            locations: buildMasterDataLocationNames(routingSettings.locations),
             associates: ASSOCIATES.map((associate) => associate.name),
             employees: routingSettings.employees.filter((employee) => employee.active).map((employee) => ({
               name: employee.name,
@@ -1329,7 +1224,12 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
           )
         : null;
       const finalDetailForm = detailForm || parsedQuestionForm;
-      let ticket = finalDetailForm || data?.needsMoreInfo || remainingMissingFields.length > 0
+      const holdDraftForMoreInfo = shouldHoldDraftForMoreInfo({
+        hasDetailForm: Boolean(finalDetailForm),
+        remainingMissingFieldCount: remainingMissingFields.length,
+        aiNeedsMoreInfo: data?.needsMoreInfo,
+      });
+      let ticket = holdDraftForMoreInfo
         ? null
         : data?.ticket || buildClientDraft(responseContext, text);
       if (
