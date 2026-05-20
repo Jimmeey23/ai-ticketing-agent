@@ -1,4 +1,4 @@
-import { isClosedTicket, Ticket } from '@/lib/ticketing-data';
+import { getEmployee, getEscalationTarget, isClosedTicket, Ticket } from '@/lib/ticketing-data';
 
 export type TicketEmailEventType =
   | 'ticket_assigned'
@@ -30,17 +30,35 @@ export function ticketEmailInFlightKey(eventType: TicketEmailEventType, ticket: 
   return `${eventType}:${ticket.id}`;
 }
 
+export function ticketEmailRecipientHints(ticket: Partial<Pick<Ticket, 'assignedTo'>>): {
+  ownerEmail?: string;
+  escalationEmail?: string;
+} {
+  const ownerName = ticket.assignedTo?.trim();
+  if (!ownerName) return {};
+
+  const owner = getEmployee(ownerName);
+  const escalation = getEmployee(getEscalationTarget(ownerName));
+
+  return {
+    ownerEmail: owner?.email || undefined,
+    escalationEmail: escalation?.email || undefined,
+  };
+}
+
 export async function sendTicketLifecycleEmail(
   eventType: TicketEmailEventType,
-  ticket: Pick<Ticket, 'id'>,
+  ticket: Pick<Ticket, 'id'> & Partial<Pick<Ticket, 'assignedTo'>>,
   actor?: string
 ): Promise<void> {
   const { backendSupabase } = await import('@/lib/backend-supabase');
+  const recipientHints = ticketEmailRecipientHints(ticket);
   const { error } = await backendSupabase.functions.invoke('ticket-email-notifications', {
     body: {
       eventType,
       ticketId: ticket.id,
       actor,
+      ...recipientHints,
     },
   });
 

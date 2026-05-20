@@ -30,3 +30,5 @@ create policy "Admins can read ticket email notifications"
 on public.ticket_email_notifications for select
 to authenticated
 using (public.current_user_role() = 'admin');
+
+notify pgrst, 'reload schema';

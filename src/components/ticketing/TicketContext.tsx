@@ -717,18 +717,20 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, [generatedNotifications, notificationDismissalStorage, notificationDismissalStorageKey, user?.id]);
 
-  const notifyTicketEmail = useCallback((eventType: TicketEmailEventType, ticket: Ticket, actor?: string) => {
+  const notifyTicketEmail = useCallback(async (eventType: TicketEmailEventType, ticket: Ticket, actor?: string): Promise<boolean> => {
     const key = ticketEmailInFlightKey(eventType, ticket);
-    if (emailNotificationInFlightRef.current.has(key)) return;
+    if (emailNotificationInFlightRef.current.has(key)) return false;
     emailNotificationInFlightRef.current.add(key);
 
-    void sendTicketLifecycleEmail(eventType, ticket, actor)
-      .catch((emailError: unknown) => {
-        console.warn('Ticket lifecycle email failed:', getErrorMessage(emailError, 'Unknown email notification error'));
-      })
-      .finally(() => {
-        emailNotificationInFlightRef.current.delete(key);
-      });
+    try {
+      await sendTicketLifecycleEmail(eventType, ticket, actor);
+      return true;
+    } catch (emailError: unknown) {
+      console.warn('Ticket lifecycle email failed:', getErrorMessage(emailError, 'Unknown email notification error'));
+      return false;
+    } finally {
+      emailNotificationInFlightRef.current.delete(key);
+    }
   }, []);
 
   const fetchHistoricTickets = useCallback(async () => {
@@ -870,17 +872,17 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         const nextTicket: Ticket = { ...current, ...patch };
         if (patch.status === 'Closed' && current.status !== 'Closed') {
-          notifyTicketEmail('ticket_closed', nextTicket, actor);
+          void notifyTicketEmail('ticket_closed', nextTicket, actor);
         }
         if (
           patch.assignedTo &&
           patch.assignedTo !== current.assignedTo &&
           (nextTicket.tags.includes('escalated') || nextTicket.tags.includes('sla-breached'))
         ) {
-          notifyTicketEmail('ticket_escalated', nextTicket, actor);
+          void notifyTicketEmail('ticket_escalated', nextTicket, actor);
         }
         if (isTicketDueToday(nextTicket)) {
-          notifyTicketEmail('ticket_due_today', nextTicket, actor);
+          void notifyTicketEmail('ticket_due_today', nextTicket, actor);
         }
       }
     },
@@ -969,8 +971,8 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const ticket = normalizeCreatedTicket(created);
       setLiveTickets((prev) => dedupeAndSortTickets([ticket, ...prev]));
       setSelectedTicketState(ticket);
-      notifyTicketEmail('ticket_assigned', ticket, reporterName);
-      if (isTicketDueToday(ticket)) notifyTicketEmail('ticket_due_today', ticket, reporterName);
+      await notifyTicketEmail('ticket_assigned', ticket, reporterName);
+      if (isTicketDueToday(ticket)) void notifyTicketEmail('ticket_due_today', ticket, reporterName);
       await refresh();
       return ticket;
     },
@@ -1142,8 +1144,8 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       const ticket = normalizeCreatedTicket(created as DbTicketRow | Ticket);
-      notifyTicketEmail('ticket_assigned', ticket, signedInReporter);
-      if (isTicketDueToday(ticket)) notifyTicketEmail('ticket_due_today', ticket, signedInReporter);
+      await notifyTicketEmail('ticket_assigned', ticket, signedInReporter);
+      if (isTicketDueToday(ticket)) void notifyTicketEmail('ticket_due_today', ticket, signedInReporter);
       await refresh();
       return ticket;
     },
@@ -1152,7 +1154,7 @@ export const TicketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   useEffect(() => {
     for (const ticket of tickets) {
-      if (isTicketDueToday(ticket)) notifyTicketEmail('ticket_due_today', ticket, 'SLA Automation');
+      if (isTicketDueToday(ticket)) void notifyTicketEmail('ticket_due_today', ticket, 'SLA Automation');
     }
   }, [notifyTicketEmail, tickets]);
 

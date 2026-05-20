@@ -17,6 +17,8 @@ type RequestBody = {
   eventType?: TicketEmailEventType;
   ticketId?: string;
   actor?: string;
+  ownerEmail?: string;
+  escalationEmail?: string;
 };
 
 type TicketRow = {
@@ -133,6 +135,36 @@ function person(name: string, employeeByName: Map<string, EmployeeRow>, fallback
   };
 }
 
+function emailHint(value?: string): string {
+  const email = value?.trim();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return '';
+  return email;
+}
+
+function errorCode(error: unknown): string {
+  return error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code || '')
+    : '';
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (!error || typeof error !== 'object') return String(error || '');
+  const value = error as { message?: unknown; details?: unknown; hint?: unknown };
+  return [value.message, value.details, value.hint].filter(Boolean).map(String).join(' ');
+}
+
+function isMissingAuditTableError(error: unknown): boolean {
+  const code = errorCode(error);
+  const message = errorMessage(error);
+  return (
+    code === 'PGRST205' ||
+    code === '42P01' ||
+    /ticket_email_notifications/i.test(message) &&
+      /could not find|schema cache|does not exist|relation/i.test(message)
+  );
+}
+
 function smtpTransport() {
   const port = Number(optionalEnv('MAILTRAP_SMTP_PORT', 'SMTP_PORT') || 2525);
   return nodemailer.createTransport({
@@ -196,8 +228,8 @@ Deno.serve(async (request) => {
       ? ownerRecord?.manager || configuredEscalation
       : configuredEscalation || ownerRecord?.manager || '';
     const fallbackTo = optionalEnv('TICKET_EMAIL_FALLBACK_TO', 'MAILTRAP_FALLBACK_TO');
-    const owner = person(ticketRow.assigned_to, employeeByName, fallbackTo);
-    const escalation = escalationName ? person(escalationName, employeeByName) : null;
+    const owner = person(ticketRow.assigned_to, employeeByName, emailHint(body.ownerEmail) || fallbackTo);
+    const escalation = escalationName ? person(escalationName, employeeByName, emailHint(body.escalationEmail)) : null;
 
     if (!owner.email) {
       return json({
@@ -207,6 +239,7 @@ Deno.serve(async (request) => {
     }
 
     const key = eventKey(body.eventType, ticketRow);
+    let auditTableAvailable = true;
     const { error: insertError } = await admin.from('ticket_email_notifications').insert({
       ticket_id: ticketRow.id,
       event_type: body.eventType,
@@ -222,7 +255,14 @@ Deno.serve(async (request) => {
     if (insertError?.code === '23505') {
       return json({ skipped: true, reason: 'duplicate', eventKey: key });
     }
-    if (insertError) throw insertError;
+    if (insertError) {
+      if (isMissingAuditTableError(insertError)) {
+        auditTableAvailable = false;
+        console.warn('ticket_email_notifications audit table unavailable; sending email without audit row', insertError);
+      } else {
+        throw insertError;
+      }
+    }
 
     const email = buildTicketLifecycleEmail({
       eventType: body.eventType,
@@ -243,18 +283,28 @@ Deno.serve(async (request) => {
         text: email.text,
       });
 
-      await admin
-        .from('ticket_email_notifications')
-        .update({ status: 'sent', sent_at: new Date().toISOString(), error: null })
-        .eq('event_key', key);
+      if (auditTableAvailable) {
+        const { error: updateError } = await admin
+          .from('ticket_email_notifications')
+          .update({ status: 'sent', sent_at: new Date().toISOString(), error: null })
+          .eq('event_key', key);
+        if (updateError) {
+          console.warn('ticket_email_notifications sent-status update failed', updateError);
+        }
+      }
 
-      return json({ ok: true, eventKey: key });
+      return json({ ok: true, eventKey: key, auditRecorded: auditTableAvailable });
     } catch (mailError) {
       const message = mailError instanceof Error ? mailError.message : String(mailError);
-      await admin
-        .from('ticket_email_notifications')
-        .update({ status: 'failed', error: message })
-        .eq('event_key', key);
+      if (auditTableAvailable) {
+        const { error: updateError } = await admin
+          .from('ticket_email_notifications')
+          .update({ status: 'failed', error: message })
+          .eq('event_key', key);
+        if (updateError) {
+          console.warn('ticket_email_notifications failed-status update failed', updateError);
+        }
+      }
       return json({ error: message, eventKey: key }, 502);
     }
   } catch (error) {

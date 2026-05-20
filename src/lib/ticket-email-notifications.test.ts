@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isTicketDueToday, ticketEmailInFlightKey } from './ticket-email-notifications';
+import { isTicketDueToday, ticketEmailInFlightKey, ticketEmailRecipientHints } from './ticket-email-notifications';
 import { buildTicketLifecycleEmail } from '../../supabase/functions/ticket-email-notifications/email-template';
 import { Ticket } from './ticketing-data';
 
@@ -31,6 +31,13 @@ describe('ticket email notifications', () => {
   it('builds stable in-flight keys per ticket lifecycle event', () => {
     expect(ticketEmailInFlightKey('ticket_assigned', baseTicket)).toBe('ticket_assigned:P57-ABC123');
     expect(ticketEmailInFlightKey('ticket_closed', baseTicket)).toBe('ticket_closed:P57-ABC123');
+  });
+
+  it('builds recipient fallback hints from the local master employee directory', () => {
+    expect(ticketEmailRecipientHints({ assignedTo: 'Imran Shaikh' })).toEqual({
+      ownerEmail: 'imran@physique57mumbai.com',
+      escalationEmail: 'jimmeey@physique57india.com',
+    });
   });
 
   it('builds professional inline-style email templates without style blocks', () => {
