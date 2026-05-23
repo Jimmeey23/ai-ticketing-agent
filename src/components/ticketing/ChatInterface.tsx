@@ -17,6 +17,7 @@ import {
   searchMomenceSessions,
 } from '@/lib/momence-api';
 import {
+  CLIENTS_AFFECTED_OPTIONS,
   captureMemberVoiceFromText,
   getIntakeFieldDefinition,
   getMissingIntakeFields,
@@ -245,7 +246,7 @@ ENTITY FIELDS — memberName, memberContact, classType, classDateTime, trainer, 
 These fields refer to a specific named person or class booking in Momence. Include them ONLY when the incident is directly about or requires one.
 Ask yourself: does resolving this issue require knowing who a specific member is, or which specific class booking it relates to?
 If the answer is no — do not include entity fields.
-Issues that never need entity fields: anything physical (door, machine, AC, plumbing, lighting, pest), ambient environment, tech/ops systems, app or Wi-Fi issues.
+Before the client-impact check, issues that do not need entity fields include anything physical (door, machine, AC, plumbing, lighting, pest), ambient environment, tech/ops systems, app or Wi-Fi issues.
 Issues that need entity fields: a named member's billing request, a freeze or rollover for a specific person, a complaint about how a trainer treated a named member in a specific class.
 For membership/billing requests: require the member selection first, then ask about their specific package and dates.
 
@@ -254,6 +255,14 @@ ROUTING AND MASTER DATA:
 - For the studio field, treat masterData.studios as authoritative; masterData.locations may include routing/location aliases and must not invalidate a selected studio value
 - Use provided routingRules, employees, departments, and locations as authoritative — never invent names, escalation paths, or SLAs
 - Member and class/session fields must use Momence-powered UI pickers, not plain text inputs
+
+CLIENT IMPACT CHECK:
+- After Athena has inferred the issue route/category/subcategory and understands the operational issue, always confirm whether any clients/community members were directly or indirectly affected.
+- Use field ID clientsAffected with select options: Yes - directly affected, Yes - indirectly affected, Yes - directly and indirectly affected, No clients affected, Not confirmed yet.
+- Do not draft or publish until clientsAffected has been answered.
+- If clientsAffected starts with "Yes", require memberName so the frontend renders Momence member search. Staff may select one or multiple affected clients from Momence.
+- This client-impact rule is the exception to the usual physical/ops entity-field restriction: even an operational issue needs memberName when affected clients are confirmed.
+- If clientsAffected is "No clients affected" or "Not confirmed yet", do not ask for memberName unless the user later confirms affected clients.
 
 TICKET QUALITY:
 - Title: specific operational summary — name the exact item, area, studio, or person. Not "Maintenance issue" or "Member complaint"
@@ -276,6 +285,13 @@ const DETAIL_FORM_FIELD_LIBRARY: Record<string, DetailFormField> = {
     type: 'select',
     required: true,
     options: REQUEST_TYPES,
+  },
+  clientsAffected: {
+    id: 'clientsAffected',
+    label: 'Were any clients directly or indirectly affected?',
+    type: 'select',
+    required: true,
+    options: [...CLIENTS_AFFECTED_OPTIONS],
   },
   studio: {
     id: 'studio',
@@ -546,6 +562,7 @@ function normalizeInferredContext(input: unknown): Partial<DetailContext> {
   assignString('memberSentiment');
   assignString('desiredResolution');
   assignString('urgencyReason');
+  assignString('clientsAffected');
 
   return next;
 }
@@ -638,6 +655,7 @@ function detailFormFromQuestionText(text: string, ctx: DetailContext): DetailFor
   for (const line of questionLines) {
     const lower = line.toLowerCase();
     if (lower.includes('studio')) add('studio', ctx.studio);
+    if (/client|member|community member|affected|impact/.test(lower)) add('clientsAffected', ctx.clientsAffected);
     if (lower.includes('member') || lower.includes('name')) add('memberName', ctx.memberName);
     if (lower.includes('contact') || lower.includes('phone') || lower.includes('email')) add('memberContact', ctx.memberContact);
     if (lower.includes('issue') || lower.includes('experience') || lower.includes('report') || lower.includes('what happened') || lower.includes('what did')) add('description', ctx.description);
@@ -730,6 +748,10 @@ function requiredFieldsForIssue(ctx: DetailContext, draft?: DraftTicket | null):
 const MEMBER_ENTITY_KEYS = ['memberId', 'memberName', 'memberContact', 'membership'] as const;
 const SESSION_ENTITY_KEYS = ['sessionId', 'classType', 'classDateTime', 'trainer'] as const;
 
+function hasConfirmedAffectedClients(value?: string): boolean {
+  return /^yes\b/i.test(value || '');
+}
+
 function shouldCarryMemberContext(issueText: string, ctx: DetailContext): boolean {
   const value = [
     issueText,
@@ -737,8 +759,10 @@ function shouldCarryMemberContext(issueText: string, ctx: DetailContext): boolea
     ctx.category,
     ctx.subCategory,
     ctx.requestType,
+    ctx.clientsAffected,
   ].filter(Boolean).join(' ').toLowerCase();
 
+  if (hasConfirmedAffectedClients(ctx.clientsAffected)) return true;
   return /member|client|customer|guest|prospect|profile|contact|phone|email|membership|package|billing|payment|refund|freeze|roll\s?over|extension|renewal|follow-up/.test(value);
 }
 
@@ -1057,6 +1081,7 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
     if (ctx.memberName) parts.push(`Member: ${ctx.memberName}`);
     if (ctx.intakeRoute) parts.push(`Intake route: ${ctx.intakeRoute}`);
     if (ctx.requestType) parts.push(`Specific ticket type: ${ctx.requestType}`);
+    if (ctx.clientsAffected) parts.push(`Client impact check: ${ctx.clientsAffected}`);
     if (ctx.memberId) parts.push(`Momence member ID: ${ctx.memberId}`);
     if (ctx.memberContact) parts.push(`Member contact: ${ctx.memberContact}`);
     if (ctx.sessionId) parts.push(`Momence session ID: ${ctx.sessionId}`);
@@ -1075,7 +1100,7 @@ export const ChatInterface: React.FC<{ onOpenExistingTicket?: (ticket: Ticket) =
     Object.entries(ctx).forEach(([key, value]) => {
       if (
         value &&
-        !['memberName', 'intakeRoute', 'requestType', 'memberId', 'memberContact', 'sessionId', 'studio', 'trainer', 'classType', 'classDateTime', 'membership', 'category', 'subCategory', 'reportedBy', 'priority', 'description', 'incidentDateTime', 'desiredResolution'].includes(key)
+        !['memberName', 'intakeRoute', 'requestType', 'clientsAffected', 'memberId', 'memberContact', 'sessionId', 'studio', 'trainer', 'classType', 'classDateTime', 'membership', 'category', 'subCategory', 'reportedBy', 'priority', 'description', 'incidentDateTime', 'desiredResolution'].includes(key)
       ) {
         parts.push(`${getDetailField(key)?.label || key}: ${value}`);
       }
@@ -1854,6 +1879,27 @@ const DetailCaptureForm: React.FC<{
     toCsvList(current)
       .filter((item) => item.toLowerCase() !== target.toLowerCase())
       .join(' | ');
+  const removeSelectedMember = (current: Record<string, string>, memberName: string) => {
+    const names = toCsvList(current.memberName);
+    const index = names.findIndex((item) => item.toLowerCase() === memberName.toLowerCase());
+    if (index < 0) {
+      return {
+        ...current,
+        memberName: removeCsvItem(current.memberName, memberName),
+      };
+    }
+    const removeAtIndex = (value?: string) =>
+      toCsvList(value)
+        .filter((_, itemIndex) => itemIndex !== index)
+        .join(' | ');
+    return {
+      ...current,
+      memberId: removeAtIndex(current.memberId),
+      memberName: removeAtIndex(current.memberName),
+      memberContact: removeAtIndex(current.memberContact),
+      membership: '',
+    };
+  };
 
   const initialValues = form.fields.reduce<Record<string, string>>((acc, field) => {
     const id = String(field.id);
@@ -1936,10 +1982,7 @@ const DetailCaptureForm: React.FC<{
               }));
             }}
             onRemove={(memberName) => {
-              setValues((current) => ({
-                ...current,
-                memberName: removeCsvItem(current.memberName, memberName),
-              }));
+              setValues((current) => removeSelectedMember(current, memberName));
             }}
           />
         )}
@@ -1991,7 +2034,7 @@ const DetailCaptureForm: React.FC<{
               </span>
               {field.type === 'select' ? (
                 (() => {
-                  const forceSingle = new Set(['intakeRoute', 'category', 'subCategory', 'priority', 'studio', 'memberSentiment']);
+                  const forceSingle = new Set(['intakeRoute', 'category', 'subCategory', 'priority', 'studio', 'memberSentiment', 'clientsAffected']);
                   const isMulti = !forceSingle.has(field.id);
                   return isMulti ? (
                     <MultiSelectDropdown
@@ -2195,6 +2238,7 @@ const MomenceMemberFormField: React.FC<{
   const [options, setOptions] = useState<MomenceMemberOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = useState(values.memberId || '');
+  const isAffectedClientSelection = hasConfirmedAffectedClients(values.clientsAffected);
 
   useEffect(() => {
     const handle = window.setTimeout(async () => {
@@ -2219,13 +2263,13 @@ const MomenceMemberFormField: React.FC<{
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3 transition focus-within:border-rose-500 focus-within:ring-4 focus-within:ring-rose-500/10 md:col-span-2">
       <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.14em] text-stone-500">
-        Momence Member *
+        {isAffectedClientSelection ? 'Affected Momence Clients' : 'Momence Member'} *
       </span>
       <input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-stone-900 outline-none transition focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10"
-        placeholder="Search Momence by member name, email, or phone"
+        placeholder="Search Momence by client name, email, or phone"
       />
       {error && <div className="mt-1 text-[11px] text-red-600">{error}</div>}
       {values.memberName && (

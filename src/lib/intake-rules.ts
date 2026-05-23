@@ -3,6 +3,7 @@ export type IntakePriority = 'Critical' | 'High' | 'Medium' | 'Low';
 export interface IntakeContext {
   intakeRoute?: string;
   requestType?: string;
+  clientsAffected?: string;
   memberId?: string;
   memberName?: string;
   memberContact?: string;
@@ -40,6 +41,13 @@ export interface IntakeContext {
 const PLACEHOLDER_VALUE_PATTERN = /unspecified|not specified|member-reported issue|ai intake|authenticated user/i;
 
 const INTAKE_ROUTES = ['Request', 'Complaint', 'Feedback', 'Internal Reporting'];
+export const CLIENTS_AFFECTED_OPTIONS = [
+  'Yes - directly affected',
+  'Yes - indirectly affected',
+  'Yes - directly and indirectly affected',
+  'No clients affected',
+  'Not confirmed yet',
+] as const;
 
 const STUDIO_REQUIRED_CATEGORIES = new Set([
   'Scheduling',
@@ -95,6 +103,13 @@ export interface IntakeFieldDefinition {
 
 const FIELD_DEFINITIONS: Record<string, IntakeFieldDefinition> = {
   intakeRoute: { id: 'intakeRoute', label: 'Intake Route', type: 'select', required: true, options: INTAKE_ROUTES },
+  clientsAffected: {
+    id: 'clientsAffected',
+    label: 'Were any clients directly or indirectly affected?',
+    type: 'select',
+    required: true,
+    options: [...CLIENTS_AFFECTED_OPTIONS],
+  },
   category: { id: 'category', label: 'Member Voice Category', type: 'select', required: true },
   subCategory: { id: 'subCategory', label: 'Specific Touchpoint', type: 'select', required: true, dependsOn: 'category' },
   studio: { id: 'studio', label: 'Studio Space', type: 'select', required: true },
@@ -207,22 +222,6 @@ export function isProtectedEntityField(id: string): boolean {
   return PROTECTED_ENTITY_FIELD_SET.has(id);
 }
 
-const MEMBER_FACING_CATEGORIES = new Set([
-  'Scheduling',
-  'Class Experience',
-  'Trainer Feedback',
-  'Pricing and Memberships',
-  'Customer Service and Communication',
-  'Safety and Security',
-  'Theft and Lost Items',
-  'Hosted Class & Partnerships',
-  'Member Progress & Transformation',
-  'Sales & Consultation',
-  'Booking & Schedule',
-  'Billing & Membership',
-  'Front Desk & Service',
-]);
-
 const CLASS_CONTEXT_CATEGORIES = new Set([
   'Scheduling',
   'Class Experience',
@@ -231,13 +230,8 @@ const CLASS_CONTEXT_CATEGORIES = new Set([
   'Booking & Schedule',
 ]);
 
-function isSpecificMemberRequired(context: IntakeContext, issueText: string, category: string): boolean {
-  if (/select member|momence member|member profile|which member|member record|link member/.test(issueText)) return true;
-  if (/multiple|several|attendees|leads|prospects|team|staff|internal report|hosted class|post-class|regional operations|sales team/i.test(issueText)) {
-    return false;
-  }
-  if (category === 'Hosted Class & Partnerships' || category === 'Sales & Consultation') return false;
-  return /refund|freeze|roll|extension|membership|package|renewal|payment|billing/.test(issueText);
+function hasConfirmedAffectedClients(value?: string): boolean {
+  return /^yes\b/i.test(value?.trim() || '');
 }
 
 export function isMissingIntakeValue(value: unknown): boolean {
@@ -490,13 +484,10 @@ export function getMissingIntakeFields(context: IntakeContext): string[] {
     getIssueProfileFieldIds(context).forEach((field) => add(field, context[field]));
   }
 
-  if (
-    routeLower !== 'internal reporting' &&
-    isSpecificMemberRequired(context, issueText, category) &&
-    (MEMBER_FACING_CATEGORIES.has(category) || membershipSpecific) &&
-    // Never ask for a member for pure facility/maintenance/ops/tech issues
-    !PHYSICAL_ONLY_CATEGORIES.has(category)
-  ) {
+  add('clientsAffected', context.clientsAffected);
+  const requireAffectedClientSelection = hasConfirmedAffectedClients(context.clientsAffected);
+
+  if (requireAffectedClientSelection) {
     add('memberName', context.memberId || context.memberName);
   }
 

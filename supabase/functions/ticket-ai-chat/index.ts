@@ -97,7 +97,7 @@ ENTITY FIELDS — memberName, memberContact, classType, classDateTime, trainer, 
 These fields refer to a specific named person or class booking in Momence. Include them ONLY when the incident is directly about or requires one.
 Ask yourself: does resolving this issue require knowing who a specific member is, or which specific class booking it relates to?
 If the answer is no — do not include entity fields.
-Issues that never need entity fields: anything physical (door, machine, AC, plumbing, lighting, pest), ambient environment, tech/ops systems, app or Wi-Fi issues.
+Before the client-impact check, issues that do not need entity fields include anything physical (door, machine, AC, plumbing, lighting, pest), ambient environment, tech/ops systems, app or Wi-Fi issues.
 Issues that need entity fields: a named member's billing request, a freeze or rollover for a specific person, a complaint about how a trainer treated a named member in a specific class.
 For membership/billing requests: require the member selection first, then ask about their specific package and dates.
 
@@ -105,6 +105,14 @@ ROUTING AND MASTER DATA:
 - Use only approved master-data values for studios, trainers, class types, categories, subcategories, priorities, and associates
 - Use provided routingRules, employees, departments, and locations as authoritative — never invent names, escalation paths, or SLAs
 - Member and class/session fields must use Momence-powered UI pickers, not plain text inputs
+
+CLIENT IMPACT CHECK:
+- After Athena has inferred the issue route/category/subcategory and understands the operational issue, always confirm whether any clients/community members were directly or indirectly affected.
+- Use field ID clientsAffected with select options: Yes - directly affected, Yes - indirectly affected, Yes - directly and indirectly affected, No clients affected, Not confirmed yet.
+- Do not draft or publish until clientsAffected has been answered.
+- If clientsAffected starts with "Yes", require memberName so the frontend renders Momence member search. Staff may select one or multiple affected clients from Momence.
+- This client-impact rule is the exception to the usual physical/ops entity-field restriction: even an operational issue needs memberName when affected clients are confirmed.
+- If clientsAffected is "No clients affected" or "Not confirmed yet", do not ask for memberName unless the user later confirms affected clients.
 
 TICKET QUALITY:
 - Title: specific operational summary — name the exact item, area, studio, or person. Not "Maintenance issue" or "Member complaint"
@@ -144,6 +152,7 @@ type AiIntakeResponse = {
 type DetailFieldId =
   | 'intakeRoute'
   | 'requestType'
+  | 'clientsAffected'
   | 'studio'
   | 'category'
   | 'subCategory'
@@ -194,6 +203,13 @@ const PRIORITY_SLA_HOURS: Record<Priority, number> = {
 
 const PLACEHOLDER_VALUE_PATTERN = /unspecified|not specified|member-reported issue|ai intake|authenticated user/i;
 const HVAC_TEXT_PATTERN = /\b(?:ac|hvac)\b|air\s?con|air conditioning|not cooling|not heating|no airflow/i;
+const CLIENTS_AFFECTED_OPTIONS = [
+  'Yes - directly affected',
+  'Yes - indirectly affected',
+  'Yes - directly and indirectly affected',
+  'No clients affected',
+  'Not confirmed yet',
+];
 
 const ASSIGNMENT_RULES: Record<string, { assignedTo: string; team: string }> = {
   Scheduling: { assignedTo: 'Akshay Rane', team: 'Sales & Client Servicing' },
@@ -276,6 +292,10 @@ function normalizePriority(value: unknown): Priority {
   return 'Medium';
 }
 
+function hasConfirmedAffectedClients(value: unknown): boolean {
+  return /^yes\b/i.test(cleanString(value));
+}
+
 function computeSlaDueAt(priority: Priority): string {
   const dueAt = new Date();
   dueAt.setHours(dueAt.getHours() + PRIORITY_SLA_HOURS[priority]);
@@ -292,8 +312,10 @@ function shouldUseMemberContext(issueText: string, context: Record<string, unkno
     category,
     subCategory,
     cleanString(context.requestType),
+    cleanString(context.clientsAffected),
   ].filter(Boolean).join(' ').toLowerCase();
 
+  if (hasConfirmedAffectedClients(context.clientsAffected)) return true;
   return /member|client|customer|guest|prospect|profile|contact|phone|email|membership|package|billing|payment|refund|freeze|roll\s?over|extension|renewal|follow-up/.test(value);
 }
 
@@ -317,6 +339,7 @@ function professionalDescription(text: string, context: Record<string, unknown>,
   const trainer = includeSessionContext ? cleanString(context.trainer) : '';
   const classType = includeSessionContext ? cleanString(context.classType) : '';
   const membership = includeMemberContext ? cleanString(context.membership) : '';
+  const clientsAffected = cleanString(context.clientsAffected);
   const resolution = cleanString(context.desiredResolution);
   const incidentDateTime = cleanString(context.incidentDateTime);
 
@@ -326,6 +349,7 @@ function professionalDescription(text: string, context: Record<string, unknown>,
     'Operational context:',
     `- Intake route: ${route}`,
     `- Category: ${category} / ${subCategory}`,
+    clientsAffected ? `- Client impact check: ${clientsAffected}` : null,
     member ? `- Community member: ${member}` : null,
     studio ? `- Studio space: ${studio}` : null,
     trainer ? `- Studio instructor: ${trainer}` : null,
@@ -524,12 +548,14 @@ async function askAiForIntake(body: RequestBody, instructions: string): Promise<
             instructions,
             '',
             'Return JSON only using this schema:',
-            '{"needsMoreInfo": boolean, "reply": string, "inferredContext": {"intakeRoute": string, "category": string, "subCategory": string, "priority": string, "memberSentiment": string, "desiredResolution": string}, "urgencyReason": string, "missingFields": string[], "publishable": boolean, "detailForm": {"title": string, "description": string, "fields": [{"id": string, "label": string, "type": "select|text|textarea|date|datetime-local|number", "required": boolean, "options": string[]}], "submitLabel": string}, "ticket": DraftTicket|null, "suggestedChips": []}',
+            '{"needsMoreInfo": boolean, "reply": string, "inferredContext": {"intakeRoute": string, "category": string, "subCategory": string, "priority": string, "clientsAffected": string, "memberSentiment": string, "desiredResolution": string}, "urgencyReason": string, "missingFields": string[], "publishable": boolean, "detailForm": {"title": string, "description": string, "fields": [{"id": string, "label": string, "type": "select|text|textarea|date|datetime-local|number", "required": boolean, "options": string[]}], "submitLabel": string}, "ticket": DraftTicket|null, "suggestedChips": []}',
             '',
-            'Master-data fields must use these exact IDs when needed: intakeRoute, category, subCategory, studio, trainer, classType, membership, memberName, memberContact, priority, description, desiredResolution, incidentDateTime, memberSentiment.',
+            'Master-data fields must use these exact IDs when needed: intakeRoute, category, subCategory, clientsAffected, studio, trainer, classType, membership, memberName, memberContact, priority, description, desiredResolution, incidentDateTime, memberSentiment.',
             'Do not ask for reportedBy; the frontend supplies it from the signed-in user.',
             'For issue-specific fields, create clear snake_case IDs prefixed by the category or subcategory, and include options for select fields.',
             'Infer category and subCategory from member voice whenever possible. Ask for category or subCategory only when the text is genuinely ambiguous after using the approved master data.',
+            `Always include clientsAffected as a required select before drafting unless context already has one of these values: ${CLIENTS_AFFECTED_OPTIONS.join(', ')}.`,
+            'If clientsAffected starts with "Yes", require memberName so the frontend renders Momence member search for the affected clients.',
             'If memberName/memberContact is needed, use memberName so the frontend renders Momence member search.',
             'If class/session details are needed, use classType so the frontend renders Momence session search.',
             'Do not include memberName, memberContact, classType, sessionId, classDateTime, or trainer in detailForm or ticket unless those fields are necessary for the described incident.',
@@ -834,21 +860,6 @@ function requiredFieldsForIssue(text: string, context: Record<string, unknown>):
     'Tech Issues',
     'App & Digital',
   ]);
-  const memberFacingCategories = new Set([
-    'Scheduling',
-    'Class Experience',
-    'Trainer Feedback',
-    'Pricing and Memberships',
-    'Customer Service and Communication',
-    'Safety and Security',
-    'Theft and Lost Items',
-    'Hosted Class & Partnerships',
-    'Member Progress & Transformation',
-    'Sales & Consultation',
-    'Booking & Schedule',
-    'Billing & Membership',
-    'Front Desk & Service',
-  ]);
   const classContextCategories = new Set(['Scheduling', 'Class Experience', 'Trainer Feedback', 'Instructor & Class Quality', 'Booking & Schedule']);
   const membershipSpecific = /freeze|pause|roll|extension|membership|package|renewal|upgrade|downgrade|auto-renew|refund|expiry|credit|class pack|billing|payment/.test(lower);
   const hostedSpecific = /hosted|partner|influencer|partnership/.test(lower) || category === 'Hosted Class & Partnerships';
@@ -898,15 +909,10 @@ function requiredFieldsForIssue(text: string, context: Record<string, unknown>):
       add('currentWorkaround', context.currentWorkaround);
     }
   }
-  const specificMemberRequired =
-    (/select member|momence member|member profile|which member|member record|link member/.test(lower) ||
-      /refund|freeze|roll|extension|membership|package|renewal|payment|billing/.test(lower)) &&
-    !/multiple|several|attendees|leads|prospects|team|staff|internal report|hosted class|post-class|regional operations|sales team/.test(lower) &&
-    category !== 'Hosted Class & Partnerships' &&
-    category !== 'Sales & Consultation' &&
-    // Never ask for a member for pure facility/maintenance/ops/tech issues
-    !physicalOnlyCategories.has(category);
-  if (route !== 'internal reporting' && specificMemberRequired && (memberFacingCategories.has(category) || membershipSpecific)) add('memberName', context.memberId || context.memberName);
+  add('clientsAffected', context.clientsAffected);
+  if (hasConfirmedAffectedClients(context.clientsAffected)) {
+    add('memberName', context.memberId || context.memberName);
+  }
   if (membershipSpecific && /select active membership|which membership|membership record|package record/.test(lower)) {
     add('membership', context.membership);
     if (/freeze start date|freeze end date|exact freeze dates/.test(lower)) {

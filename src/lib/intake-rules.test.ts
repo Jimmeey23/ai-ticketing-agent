@@ -23,6 +23,7 @@ describe('intake publishability rules', () => {
     };
 
     expect(getMissingIntakeFields(context)).toEqual([
+      'clientsAffected',
       'reportedBy',
       'priority',
       'description',
@@ -48,9 +49,9 @@ describe('intake publishability rules', () => {
     expect(isMissingIntakeValue('Member-reported issue')).toBe(true);
     expect(isMissingIntakeValue('AI Intake')).toBe(true);
     expect(isMissingIntakeValue('Bandra')).toBe(false);
-    expect(getMissingIntakeFields(context)).toEqual(['studio', 'incidentDateTime', 'reportedBy']);
+    expect(getMissingIntakeFields(context)).toEqual(['studio', 'incidentDateTime', 'clientsAffected', 'reportedBy']);
 
-    expect(getMissingIntakeFields({ ...context, studio: 'Bandra' })).toEqual(['incidentDateTime', 'reportedBy']);
+    expect(getMissingIntakeFields({ ...context, studio: 'Bandra' })).toEqual(['incidentDateTime', 'clientsAffected', 'reportedBy']);
   });
 
   it('marks a complete member-facing complaint context publishable', () => {
@@ -59,6 +60,7 @@ describe('intake publishability rules', () => {
       category: 'Customer Service and Communication',
       subCategory: 'Delay in Response',
       memberId: 'mom_123',
+      clientsAffected: 'Yes - directly affected',
       desiredResolution: 'Member requested a WhatsApp update and timeline for resolution.',
       memberSentiment: 'Member Expressed Frustration/Anger',
       reportedBy: 'Priya Shah',
@@ -76,6 +78,7 @@ describe('intake publishability rules', () => {
       category: 'Customer Service and Communication',
       subCategory: 'Delay in Response',
       memberId: 'mom_123',
+      clientsAffected: 'Yes - directly affected',
       desiredResolution: 'Member requested a written update.',
       memberSentiment: 'Member Expressed Dissatisfaction',
       reportedBy: 'frontdesk@physique57india.com',
@@ -224,8 +227,55 @@ describe('intake publishability rules', () => {
       reportedBy: 'ops@physique57india.com',
     };
 
-    expect(getMissingIntakeFields(context)).toContain('memberName');
-    expect(getMissingIntakeFields({ ...context, memberId: 'mom_123', memberName: 'Asha Mehta' })).not.toContain('memberName');
+    expect(getMissingIntakeFields(context)).toContain('clientsAffected');
+    expect(getMissingIntakeFields({ ...context, clientsAffected: 'Yes - directly affected' })).toContain('memberName');
+    expect(getMissingIntakeFields({
+      ...context,
+      clientsAffected: 'Yes - directly affected',
+      memberId: 'mom_123',
+      memberName: 'Asha Mehta',
+    })).not.toContain('memberName');
+  });
+
+  it('requires client impact confirmation before drafting operational issues', () => {
+    const text = 'AC not cooling in Bandra studio';
+    const context: IntakeContext = {
+      ...inferIntakeContextFromText(text),
+      initialReport: text,
+      reportedBy: 'ops@physique57india.com',
+      incidentDateTime: '2026-05-23T09:30',
+      hvacSymptom: 'Not cooling',
+      affectedArea: 'Reception and studio one',
+      operationalImpact: 'Front desk moved check-in away from the warm area.',
+      currentWorkaround: 'Fans are running until the technician arrives.',
+      resolutionRequirement: 'Vendor inspection and repair needed today.',
+    };
+
+    expect(getMissingIntakeFields(context)).toEqual(['clientsAffected']);
+    expect(getMissingIntakeFields({ ...context, clientsAffected: 'No clients affected' })).toEqual([]);
+  });
+
+  it('requires Momence member search when affected clients are confirmed', () => {
+    const text = 'AC not cooling in Bandra studio';
+    const context: IntakeContext = {
+      ...inferIntakeContextFromText(text),
+      initialReport: text,
+      reportedBy: 'ops@physique57india.com',
+      incidentDateTime: '2026-05-23T09:30',
+      hvacSymptom: 'Not cooling',
+      affectedArea: 'Reception and studio one',
+      operationalImpact: 'Two members said they felt uncomfortable after class.',
+      currentWorkaround: 'Fans are running until the technician arrives.',
+      resolutionRequirement: 'Vendor inspection and repair needed today.',
+      clientsAffected: 'Yes - indirectly affected',
+    };
+
+    expect(getMissingIntakeFields(context)).toEqual(['memberName']);
+    expect(getMissingIntakeFields({
+      ...context,
+      memberId: 'mom_456 | mom_789',
+      memberName: 'Asha Mehta | Tara Rao',
+    })).toEqual([]);
   });
 
   it('asks washing machine operational questions without member or class fields', () => {
@@ -249,6 +299,7 @@ describe('intake publishability rules', () => {
       'operationalImpact',
       'currentWorkaround',
       'resolutionRequirement',
+      'clientsAffected',
     ]);
     expect(getMissingIntakeFields(context)).not.toContain('memberName');
     expect(getMissingIntakeFields(context)).not.toContain('classType');
@@ -275,6 +326,7 @@ describe('intake publishability rules', () => {
       'accessStatus',
       'securityRisk',
       'resolutionRequirement',
+      'clientsAffected',
     ]);
     expect(getMissingIntakeFields(context)).not.toContain('memberName');
     expect(getMissingIntakeFields(context)).not.toContain('classType');
@@ -301,6 +353,7 @@ describe('intake publishability rules', () => {
       'operationalImpact',
       'currentWorkaround',
       'resolutionRequirement',
+      'clientsAffected',
     ]);
   });
 });
