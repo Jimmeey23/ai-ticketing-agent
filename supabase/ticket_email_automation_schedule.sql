@@ -24,10 +24,10 @@ select cron.schedule(
   $$
   select
     net.http_post(
-      url := 'https://YOUR_PROJECT_REF.supabase.co/functions/v1/ticket-email-automation',
+      url := 'https://nujgmxqefoumhhreqzxm.supabase.co/functions/v1/ticket-email-automation',
       headers := jsonb_build_object(
         'Content-Type', 'application/json',
-        'x-ticket-email-automation-secret', 'YOUR_TICKET_EMAIL_AUTOMATION_SECRET'
+        'x-ticket-email-automation-secret', 'T1CKET@UTOM@T1ON'
       ),
       body := jsonb_build_object(
         'actor', 'SLA Automation',
