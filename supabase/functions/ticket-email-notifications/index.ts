@@ -47,6 +47,10 @@ type EmployeeRow = {
   manager?: string | null;
 };
 
+type NotificationAuditRow = {
+  status: string;
+};
+
 const VALID_EVENTS = new Set<TicketEmailEventType>([
   'ticket_assigned',
   'ticket_due_today',
@@ -154,6 +158,20 @@ function errorMessage(error: unknown): string {
   return [value.message, value.details, value.hint].filter(Boolean).map(String).join(' ');
 }
 
+function bearerToken(authorization: string): string {
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || '';
+}
+
+function isTrustedServerRequest(request: Request, serviceRoleKey: string): boolean {
+  const automationSecret = optionalEnv('TICKET_EMAIL_AUTOMATION_SECRET');
+  const requestSecret = request.headers.get('x-ticket-email-automation-secret') || '';
+  return (
+    bearerToken(request.headers.get('authorization') || '') === serviceRoleKey ||
+    Boolean(automationSecret && requestSecret && requestSecret === automationSecret)
+  );
+}
+
 function isMissingAuditTableError(error: unknown): boolean {
   const code = errorCode(error);
   const message = errorMessage(error);
@@ -200,7 +218,10 @@ Deno.serve(async (request) => {
     const serviceRoleKey = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
     const authorization = request.headers.get('authorization') || '';
 
-    if (Deno.env.get('ALLOW_UNAUTHENTICATED_TICKET_EMAILS') !== 'true') {
+    if (
+      Deno.env.get('ALLOW_UNAUTHENTICATED_TICKET_EMAILS') !== 'true' &&
+      !isTrustedServerRequest(request, serviceRoleKey)
+    ) {
       const userClient = createClient(supabaseUrl, anonKey, {
         global: { headers: { Authorization: authorization } },
         auth: { persistSession: false, autoRefreshToken: false },
@@ -260,10 +281,35 @@ Deno.serve(async (request) => {
       status: 'pending',
     });
 
+    let duplicateFailedNotificationRetry = false;
     if (insertError?.code === '23505') {
-      return json({ skipped: true, reason: 'duplicate', eventKey: key });
+      const { data: existingNotification, error: existingNotificationError } = await admin
+        .from('ticket_email_notifications')
+        .select('status')
+        .eq('event_key', key)
+        .maybeSingle();
+      if (existingNotificationError) throw existingNotificationError;
+      const existingStatus = (existingNotification as NotificationAuditRow | null)?.status || '';
+      if (existingStatus !== 'failed') {
+        return json({ skipped: true, reason: 'duplicate', eventKey: key, status: existingStatus || null });
+      }
+      duplicateFailedNotificationRetry = true;
+
+      const { error: retryUpdateError } = await admin
+        .from('ticket_email_notifications')
+        .update({
+          owner_name: owner.name,
+          owner_email: owner.email,
+          escalation_name: escalation?.name || null,
+          escalation_email: escalation?.email || null,
+          actor: body.actor || null,
+          status: 'pending',
+          error: null,
+        })
+        .eq('event_key', key);
+      if (retryUpdateError) throw retryUpdateError;
     }
-    if (insertError) {
+    if (insertError && !duplicateFailedNotificationRetry) {
       if (isMissingAuditTableError(insertError)) {
         auditTableAvailable = false;
         console.warn('ticket_email_notifications audit table unavailable; sending email without audit row', insertError);
